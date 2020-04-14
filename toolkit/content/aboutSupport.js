@@ -368,7 +368,14 @@ var snapshotFormatters = {
     let apzInfo = [];
     let formatApzInfo = function(info) {
       let out = [];
-      for (let type of ["Wheel", "Touch", "Drag", "Keyboard", "Autoscroll"]) {
+      for (let type of [
+        "Wheel",
+        "Touch",
+        "Drag",
+        "Keyboard",
+        "Autoscroll",
+        "Zooming",
+      ]) {
         let key = "Apz" + type + "Input";
 
         if (!(key in info)) {
@@ -957,6 +964,14 @@ var snapshotFormatters = {
     if (a11yInstantiator) {
       a11yInstantiator.textContent = data.instantiator;
     }
+  },
+
+  startupCache(data) {
+    $("startup-cache-disk-cache-path").textContent = data.DiskCachePath;
+    $("startup-cache-ignore-disk-cache").textContent = data.IgnoreDiskCache;
+    $("startup-cache-found-disk-cache-on-init").textContent =
+      data.FoundDiskCacheOnInit;
+    $("startup-cache-wrote-to-disk-cache").textContent = data.WroteToDiskCache;
   },
 
   libraryVersions(data) {

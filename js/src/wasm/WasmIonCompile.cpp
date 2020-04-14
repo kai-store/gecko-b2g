@@ -340,6 +340,24 @@ class FunctionCompiler {
     return ins;
   }
 
+  MDefinition* ursh(MDefinition* lhs, MDefinition* rhs, MIRType type) {
+    if (inDeadCode()) {
+      return nullptr;
+    }
+    auto* ins = MUrsh::NewWasm(alloc(), lhs, rhs, type);
+    curBlock_->add(ins);
+    return ins;
+  }
+
+  MDefinition* add(MDefinition* lhs, MDefinition* rhs, MIRType type) {
+    if (inDeadCode()) {
+      return nullptr;
+    }
+    auto* ins = MAdd::NewWasm(alloc(), lhs, rhs, type);
+    curBlock_->add(ins);
+    return ins;
+  }
+
   bool mustPreserveNaN(MIRType type) {
     return IsFloatingPointType(type) && !env().isAsmJS();
   }
@@ -350,7 +368,7 @@ class FunctionCompiler {
     }
 
     // wasm can't fold x - 0.0 because of NaN with custom payloads.
-    MSub* ins = MSub::New(alloc(), lhs, rhs, type, mustPreserveNaN(type));
+    MSub* ins = MSub::NewWasm(alloc(), lhs, rhs, type, mustPreserveNaN(type));
     curBlock_->add(ins);
     return ins;
   }
@@ -452,7 +470,7 @@ class FunctionCompiler {
     if (inDeadCode()) {
       return nullptr;
     }
-    auto* ins = MBitNot::NewInt32(alloc(), op);
+    auto* ins = MBitNot::New(alloc(), op);
     curBlock_->add(ins);
     return ins;
   }
@@ -2523,7 +2541,7 @@ static bool EmitAdd(FunctionCompiler& f, ValType type, MIRType mirType) {
     return false;
   }
 
-  f.iter().setResult(f.binary<MAdd>(lhs, rhs, mirType));
+  f.iter().setResult(f.add(lhs, rhs, mirType));
   return true;
 }
 
@@ -2570,6 +2588,18 @@ static bool EmitBitwise(FunctionCompiler& f, ValType operandType,
   }
 
   f.iter().setResult(f.binary<MIRClass>(lhs, rhs, mirType));
+  return true;
+}
+
+static bool EmitUrsh(FunctionCompiler& f, ValType operandType,
+                     MIRType mirType) {
+  MDefinition* lhs;
+  MDefinition* rhs;
+  if (!f.iter().readBinary(operandType, &lhs, &rhs)) {
+    return false;
+  }
+
+  f.iter().setResult(f.ursh(lhs, rhs, mirType));
   return true;
 }
 
@@ -3771,7 +3801,7 @@ static bool EmitRefFunc(FunctionCompiler& f) {
 
   uint32_t lineOrBytecode = f.readCallSiteLineOrBytecode();
 
-  const SymbolicAddressSignature& callee = SASigFuncRef;
+  const SymbolicAddressSignature& callee = SASigRefFunc;
   CallCompileState args;
   if (!f.passInstance(callee.argTypes[0], &args)) {
     return false;
@@ -4119,7 +4149,7 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
       case uint16_t(Op::I32ShrS):
         CHECK(EmitBitwise<MRsh>(f, ValType::I32, MIRType::Int32));
       case uint16_t(Op::I32ShrU):
-        CHECK(EmitBitwise<MUrsh>(f, ValType::I32, MIRType::Int32));
+        CHECK(EmitUrsh(f, ValType::I32, MIRType::Int32));
       case uint16_t(Op::I32Rotl):
       case uint16_t(Op::I32Rotr):
         CHECK(EmitRotate(f, ValType::I32, Op(op.b0) == Op::I32Rotl));
@@ -4154,7 +4184,7 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
       case uint16_t(Op::I64ShrS):
         CHECK(EmitBitwise<MRsh>(f, ValType::I64, MIRType::Int64));
       case uint16_t(Op::I64ShrU):
-        CHECK(EmitBitwise<MUrsh>(f, ValType::I64, MIRType::Int64));
+        CHECK(EmitUrsh(f, ValType::I64, MIRType::Int64));
       case uint16_t(Op::I64Rotl):
       case uint16_t(Op::I64Rotr):
         CHECK(EmitRotate(f, ValType::I64, Op(op.b0) == Op::I64Rotl));
@@ -4301,6 +4331,22 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
       case uint16_t(Op::I64Extend32S):
         CHECK(EmitSignExtend(f, 4, 8));
 
+        // Gc operations
+#ifdef ENABLE_WASM_GC
+      case uint16_t(Op::GcPrefix): {
+        switch (op.b1) {
+          case uint32_t(GcOp::StructNew):
+          case uint32_t(GcOp::StructGet):
+          case uint32_t(GcOp::StructSet):
+          case uint32_t(GcOp::StructNarrow):
+            // Not yet supported
+            return f.iter().unrecognizedOpcode(&op);
+          default:
+            return f.iter().unrecognizedOpcode(&op);
+        }
+      }
+#endif
+
       // Miscellaneous operations
       case uint16_t(Op::MiscPrefix): {
         switch (op.b1) {
@@ -4341,14 +4387,6 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
             CHECK(EmitTableGrow(f));
           case uint32_t(MiscOp::TableSize):
             CHECK(EmitTableSize(f));
-#endif
-#ifdef ENABLE_WASM_GC
-          case uint32_t(MiscOp::StructNew):
-          case uint32_t(MiscOp::StructGet):
-          case uint32_t(MiscOp::StructSet):
-          case uint32_t(MiscOp::StructNarrow):
-            // Not yet supported
-            return f.iter().unrecognizedOpcode(&op);
 #endif
           default:
             return f.iter().unrecognizedOpcode(&op);

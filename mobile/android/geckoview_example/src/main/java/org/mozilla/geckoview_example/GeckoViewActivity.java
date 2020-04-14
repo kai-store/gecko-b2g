@@ -387,8 +387,10 @@ public class GeckoViewActivity
     private boolean mEnableRemoteDebugging;
     private boolean mKillProcessOnDestroy;
     private boolean mDesktopMode;
+    private String mUserAgentOverride;
     private TabSession mPopupSession;
     private View mPopupView;
+    private int mPreferredColorScheme;
 
     private boolean mShowNotificationsRejected;
     private ArrayList<String> mAcceptedPersistentStorage = new ArrayList<String>();
@@ -436,6 +438,11 @@ public class GeckoViewActivity
                 getString(R.string.key_tracking_protection), true);
         boolean autoplay = preferences.getBoolean(
                 getString(R.string.key_autoplay), false);
+        int colorScheme = Integer.parseInt(preferences.getString(
+                getString(R.string.key_preferred_color_scheme),
+                Integer.toString(GeckoRuntimeSettings.COLOR_SCHEME_SYSTEM)));
+        String userAgentOverride = preferences.getString(
+                getString(R.string.key_user_agent_override), "");
 
         if (mEnableRemoteDebugging != remoteDebugging) {
             if (sGeckoRuntime != null) {
@@ -462,6 +469,26 @@ public class GeckoViewActivity
                 currentSession.reload();
             }
             mAllowAutoplay = autoplay;
+        }
+
+        if (mPreferredColorScheme != colorScheme) {
+            if (sGeckoRuntime != null) {
+                sGeckoRuntime.getSettings().setPreferredColorScheme(colorScheme);
+            }
+            mPreferredColorScheme = colorScheme;
+            if (currentSession != null) {
+                currentSession.reload();
+            }
+        }
+
+        if (!userAgentOverride.equals(mUserAgentOverride)) {
+            mUserAgentOverride = !userAgentOverride.isEmpty() ? userAgentOverride : null;
+            for (final TabSession session : mTabSessionManager.getSessions()) {
+                session.getSettings().setUserAgentOverride(mUserAgentOverride);
+            }
+            if (currentSession != null) {
+                currentSession.reload();
+            }
         }
     }
 
@@ -523,6 +550,7 @@ public class GeckoViewActivity
                         .enhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.DEFAULT)
                         .build())
                     .crashHandler(ExampleCrashHandler.class)
+                    .preferredColorScheme(mPreferredColorScheme)
                     .telemetryDelegate(new ExampleTelemetryDelegate())
                     .aboutConfigEnabled(true);
 
@@ -737,6 +765,7 @@ public class GeckoViewActivity
         TabSession session = mTabSessionManager.newSession(new GeckoSessionSettings.Builder()
                 .usePrivateMode(mUsePrivateBrowsing)
                 .fullAccessibilityTree(mFullAccessibilityTree)
+                .userAgentOverride(mUserAgentOverride)
                 .viewportMode(mDesktopMode
                         ? GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
                         : GeckoSessionSettings.VIEWPORT_MODE_MOBILE)

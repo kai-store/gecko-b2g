@@ -8,7 +8,6 @@
 #include "mozilla/gfx/Helpers.h"
 #include "nsXULElement.h"
 
-#include "nsAutoPtr.h"
 #include "nsMathUtils.h"
 #include "SVGImageContext.h"
 
@@ -2407,6 +2406,7 @@ class CanvasUserSpaceMetrics : public UserSpaceMetricsWithSize {
     params.language = mFontLanguage;
     params.explicitLanguage = mExplicitLanguage;
     params.textPerf = mPresContext->GetTextPerfMetrics();
+    params.fontStats = mPresContext->GetFontMatchingStats();
     params.featureValueLookup = mPresContext->GetFontFeatureValuesLookup();
     RefPtr<nsFontMetrics> fontMetrics = dc->GetMetricsFor(mFont, params);
     return NSAppUnitsToFloatPixels(fontMetrics->XHeight(),
@@ -3266,6 +3266,7 @@ bool CanvasRenderingContext2D::SetFontInternal(const nsAString& aFont,
   params.explicitLanguage = fontStyle->mExplicitLanguage;
   params.userFontSet = c->GetUserFontSet();
   params.textPerf = c->GetTextPerfMetrics();
+  params.fontStats = c->GetFontMatchingStats();
   RefPtr<nsFontMetrics> metrics =
       c->DeviceContext()->GetMetricsFor(resizedFont, params);
 
@@ -3496,7 +3497,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor
         mTextRunFlags(),
         mDoMeasureBoundingBox(false) {
     if (Preferences::GetBool(GFX_MISSING_FONTS_NOTIFY_PREF)) {
-      mMissingFonts = new gfxMissingFontRecorder();
+      mMissingFonts = MakeUnique<gfxMissingFontRecorder>();
     }
   }
 
@@ -3522,7 +3523,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor
     mTextRun = mFontgrp->MakeTextRun(
         aText, aLength, mDrawTarget, mAppUnitsPerDevPixel, flags,
         nsTextFrameUtils::Flags::DontSkipDrawingForPendingUserFonts,
-        mMissingFonts);
+        mMissingFonts.get());
   }
 
   virtual nscoord GetWidth() override {
@@ -3717,7 +3718,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor
 
   // to record any unsupported characters found in the text,
   // and notify front-end if it is interested
-  nsAutoPtr<gfxMissingFontRecorder> mMissingFonts;
+  UniquePtr<gfxMissingFontRecorder> mMissingFonts;
 
   // dev pixel conversion factor
   int32_t mAppUnitsPerDevPixel;
@@ -4041,15 +4042,17 @@ gfxFontGroup* CanvasRenderingContext2D::GetCurrentFontStyle() {
       gfxFontStyle style;
       style.size = kDefaultFontSize;
       gfxTextPerfMetrics* tp = nullptr;
+      FontMatchingStats* fontStats = nullptr;
       if (presShell && !presShell->IsDestroying()) {
         tp = presShell->GetPresContext()->GetTextPerfMetrics();
+        fontStats = presShell->GetPresContext()->GetFontMatchingStats();
       }
       int32_t perDevPixel, perCSSPixel;
       GetAppUnitsValues(&perDevPixel, &perCSSPixel);
       gfxFloat devToCssSize = gfxFloat(perDevPixel) / gfxFloat(perCSSPixel);
       CurrentState().fontGroup = gfxPlatform::GetPlatform()->CreateFontGroup(
           FontFamilyList(StyleGenericFontFamily::SansSerif), &style, tp,
-          nullptr, devToCssSize);
+          fontStats, nullptr, devToCssSize);
       if (CurrentState().fontGroup) {
         CurrentState().font = kDefaultFontStyle;
       } else {

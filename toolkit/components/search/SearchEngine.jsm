@@ -447,7 +447,7 @@ function ParamSubstitution(paramValue, searchTerms, engine) {
     }
 
     // moz: parameters are only available for default search engines.
-    if (name.startsWith("moz:") && engine._isDefault) {
+    if (name.startsWith("moz:") && engine.isAppProvided) {
       // {moz:locale} and {moz:distributionID} are common
       if (name == MOZ_PARAM_LOCALE) {
         return Services.locale.requestedLocale;
@@ -511,7 +511,7 @@ const ENGINE_ALIASES = new Map([
 ]);
 
 function getInternalAliases(engine) {
-  if (!engine._isDefault) {
+  if (!engine.isAppProvided) {
     return [];
   }
   for (let [name, aliases] of ENGINE_ALIASES) {
@@ -765,6 +765,10 @@ function SearchEngine(options = {}) {
     throw new Error("isBuiltin missing from options.");
   }
   this._isBuiltin = options.isBuiltin;
+  // The alias coming from the engine definition (via webextension
+  // keyword field for example) may be overriden in the metaData
+  // with a user defined alias.
+  this._definedAlias = null;
   this._urls = [];
   this._metaData = {};
 
@@ -1424,7 +1428,7 @@ SearchEngine.prototype = {
     // on the end of the URL, rather than the MozParams (xref bug 1484232).
     if (params.mozParams) {
       for (let p of params.mozParams) {
-        if ((p.condition || p.purpose) && !this._isDefault) {
+        if ((p.condition || p.purpose) && !this.isAppProvided) {
           continue;
         }
         url._addMozParam(p);
@@ -1489,9 +1493,7 @@ SearchEngine.prototype = {
       });
     }
 
-    if (params.queryCharset) {
-      this._queryCharset = params.queryCharset;
-    }
+    this._queryCharset = params.queryCharset || null;
     if (params.postData) {
       let queries = new URLSearchParams(params.postData);
       for (let [name, value] of queries) {
@@ -1503,7 +1505,7 @@ SearchEngine.prototype = {
     if (params.shortName) {
       this._shortName = params.shortName;
     }
-    this.alias = params.alias;
+    this._definedAlias = params.alias?.trim() || null;
     this._description = params.description;
     this.__searchForm = params.searchForm;
     if (params.iconURL) {
@@ -1515,6 +1517,20 @@ SearchEngine.prototype = {
         this._addIconToMap(icon.size, icon.size, icon.url);
       }
     }
+  },
+
+  /**
+   * Update this engine based on new metadata, used during
+   * webextension upgrades.
+   *
+   * @param {object} params
+   *   The URL parameters.
+   */
+  _updateFromMetadata(params) {
+    this._urls = [];
+    this._iconMapObj = null;
+    this._initFromMetadata(params.name, params);
+    SearchUtils.notifyAction(this, SearchUtils.MODIFIED_TYPE.CHANGED);
   },
 
   /**
@@ -1574,7 +1590,7 @@ SearchEngine.prototype = {
       } else if (
         param.localName == "MozParam" &&
         // We only support MozParams for default search engines
-        this._isDefault
+        this.isAppProvided
       ) {
         let condition = param.getAttribute("condition");
 
@@ -1825,7 +1841,7 @@ SearchEngine.prototype = {
 
   // nsISearchEngine
   get alias() {
-    return this.getAttr("alias");
+    return this.getAttr("alias") || this._definedAlias;
   },
   set alias(val) {
     var value = val ? val.trim() : null;
@@ -1856,7 +1872,7 @@ SearchEngine.prototype = {
    */
   get identifier() {
     // No identifier if If the engine isn't app-provided
-    return this._isDefault ? this._shortName : null;
+    return this.isAppProvided ? this._shortName : null;
   },
 
   get description() {
@@ -2016,7 +2032,7 @@ SearchEngine.prototype = {
     );
   },
 
-  get _isDefault() {
+  get isAppProvided() {
     if (this._extensionID) {
       return this._isBuiltin || this._isDistribution;
     }

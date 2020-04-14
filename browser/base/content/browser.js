@@ -142,7 +142,7 @@ XPCOMUtils.defineLazyScriptGetter(
 );
 XPCOMUtils.defineLazyScriptGetter(
   this,
-  ["gExtensionsNotifications", "gXPInstallObserver"],
+  ["BrowserAddonUI", "gExtensionsNotifications", "gXPInstallObserver"],
   "chrome://browser/content/browser-addons.js"
 );
 XPCOMUtils.defineLazyScriptGetter(
@@ -1489,6 +1489,10 @@ function _loadURI(browser, uri, params = {}) {
     throw new Error("Must load with a triggering Principal");
   }
 
+  if (userContextId && userContextId != browser.getAttribute("usercontextid")) {
+    throw new Error("Cannot load with mismatched userContextId");
+  }
+
   let {
     uriObject,
     requiredRemoteType,
@@ -1524,14 +1528,6 @@ function _loadURI(browser, uri, params = {}) {
   };
   try {
     if (!mustChangeProcess) {
-      if (userContextId) {
-        browser.webNavigation.setOriginAttributesBeforeLoading({
-          userContextId,
-          privateBrowsingId: PrivateBrowsingUtils.isBrowserPrivate(browser)
-            ? 1
-            : 0,
-        });
-      }
       browser.webNavigation.loadURI(uri, loadURIOptions);
     } else {
       // Check if the current browser is allowed to unload.
@@ -1580,14 +1576,6 @@ function _loadURI(browser, uri, params = {}) {
       Cu.reportError(e);
       gBrowser.updateBrowserRemotenessByURL(browser, uri);
 
-      if (userContextId) {
-        browser.webNavigation.setOriginAttributesBeforeLoading({
-          userContextId,
-          privateBrowsingId: PrivateBrowsingUtils.isBrowserPrivate(browser)
-            ? 1
-            : 0,
-        });
-      }
       browser.webNavigation.loadURI(uri, loadURIOptions);
     } else {
       throw e;
@@ -2111,15 +2099,9 @@ var gBrowserInit = {
       this._firstBrowserPaintDeferred.resolve = resolve;
     });
 
-    // To prevent flickering of the urlbar-history-dropmarker in the general
-    // case, the urlbar has the 'focused' attribute set by default.
-    // If we are not fully sure the urlbar will be focused in this window,
-    // we should remove the attribute before first paint.
-    let shouldRemoveFocusedAttribute = true;
     this._callWithURIToLoad(uriToLoad => {
       if (isBlankPageURL(uriToLoad) || uriToLoad == "about:privatebrowsing") {
         gURLBar.select();
-        shouldRemoveFocusedAttribute = false;
         return;
       }
 
@@ -2141,16 +2123,6 @@ var gBrowserInit = {
         gBrowser.selectedBrowser.focus();
       }
     });
-    // Delay removing the attribute using requestAnimationFrame to avoid
-    // invalidating styles multiple times in a row if uriToLoadPromise
-    // resolves before first paint.
-    if (shouldRemoveFocusedAttribute) {
-      window.requestAnimationFrame(() => {
-        if (shouldRemoveFocusedAttribute) {
-          gURLBar.removeAttribute("focused");
-        }
-      });
-    }
   },
 
   _handleURIToLoad() {
@@ -4102,17 +4074,15 @@ const BrowserSearch = {
    * @param {Boolean} [delayUpdate]  Set to true, to delay update until the
    *                                 placeholder is not displayed.
    */
-  async _updateURLBarPlaceholder(engineName, isPrivate, delayUpdate = false) {
+  _updateURLBarPlaceholder(engineName, isPrivate, delayUpdate = false) {
     if (!engineName) {
       throw new Error("Expected an engineName to be specified");
     }
 
-    let defaultEngines = await Services.search.getDefaultEngines();
+    const engine = Services.search.getEngineByName(engineName);
     const prefName =
       "browser.urlbar.placeholderName" + (isPrivate ? ".private" : "");
-    if (
-      defaultEngines.some(defaultEngine => defaultEngine.name == engineName)
-    ) {
+    if (engine.isAppProvided) {
       Services.prefs.setStringPref(prefName, engineName);
     } else {
       Services.prefs.clearUserPref(prefName);
@@ -5006,13 +4976,6 @@ var XULBrowserWindow = {
       document.getElementById("context-viewsource"),
       document.getElementById("View:PageSource"),
     ]);
-  },
-
-  forceInitialBrowserNonRemote(aOpener) {
-    gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, {
-      opener: aOpener,
-      remoteType: E10SUtils.NOT_REMOTE,
-    });
   },
 
   setDefaultStatus(status) {
@@ -6000,10 +5963,9 @@ nsBrowserAccess.prototype = {
     aIsExternal,
     aForceNotRemote = false,
     aUserContextId = Ci.nsIScriptSecurityManager.DEFAULT_USER_CONTEXT_ID,
-    aOpenerWindow = null,
+    aOpenWindowInfo = null,
     aOpenerBrowser = null,
     aTriggeringPrincipal = null,
-    aNextRemoteTabId = 0,
     aName = "",
     aCsp = null,
     aSkipLoad = false
@@ -6040,9 +6002,8 @@ nsBrowserAccess.prototype = {
       fromExternal: aIsExternal,
       inBackground: loadInBackground,
       forceNotRemote: aForceNotRemote,
-      opener: aOpenerWindow,
+      openWindowInfo: aOpenWindowInfo,
       openerBrowser: aOpenerBrowser,
-      nextRemoteTabId: aNextRemoteTabId,
       name: aName,
       csp: aCsp,
       skipLoad: aSkipLoad,
@@ -6058,7 +6019,7 @@ nsBrowserAccess.prototype = {
 
   createContentWindow(
     aURI,
-    aOpener,
+    aOpenWindowInfo,
     aWhere,
     aFlags,
     aTriggeringPrincipal,
@@ -6066,7 +6027,7 @@ nsBrowserAccess.prototype = {
   ) {
     return this.getContentWindowOrOpenURI(
       null,
-      aOpener,
+      aOpenWindowInfo,
       aWhere,
       aFlags,
       aTriggeringPrincipal,
@@ -6075,14 +6036,14 @@ nsBrowserAccess.prototype = {
     );
   },
 
-  openURI(aURI, aOpener, aWhere, aFlags, aTriggeringPrincipal, aCsp) {
+  openURI(aURI, aOpenWindowInfo, aWhere, aFlags, aTriggeringPrincipal, aCsp) {
     if (!aURI) {
       Cu.reportError("openURI should only be called with a valid URI");
       throw Cr.NS_ERROR_FAILURE;
     }
     return this.getContentWindowOrOpenURI(
       aURI,
-      aOpener,
+      aOpenWindowInfo,
       aWhere,
       aFlags,
       aTriggeringPrincipal,
@@ -6093,29 +6054,19 @@ nsBrowserAccess.prototype = {
 
   getContentWindowOrOpenURI(
     aURI,
-    aOpener,
+    aOpenWindowInfo,
     aWhere,
     aFlags,
     aTriggeringPrincipal,
     aCsp,
     aSkipLoad
   ) {
-    // This function should only ever be called if we're opening a URI
-    // from a non-remote browser window (via nsContentTreeOwner).
-    if (aOpener && Cu.isCrossProcessWrapper(aOpener)) {
-      Cu.reportError(
-        "nsBrowserAccess.openURI was passed a CPOW for aOpener. " +
-          "openURI should only ever be called from non-remote browsers."
-      );
-      throw Cr.NS_ERROR_FAILURE;
-    }
-
     var browsingContext = null;
     var isExternal = !!(aFlags & Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
 
-    if (aOpener && isExternal) {
+    if (aOpenWindowInfo && isExternal) {
       Cu.reportError(
-        "nsBrowserAccess.openURI did not expect an opener to be " +
+        "nsBrowserAccess.openURI did not expect aOpenWindowInfo to be " +
           "passed if the context is OPEN_EXTERNAL."
       );
       throw Cr.NS_ERROR_FAILURE;
@@ -6144,18 +6095,22 @@ nsBrowserAccess.prototype = {
     let referrerInfo;
     if (aFlags & Ci.nsIBrowserDOMWindow.OPEN_NO_REFERRER) {
       referrerInfo = new ReferrerInfo(Ci.nsIReferrerInfo.EMPTY, false, null);
-    } else {
+    } else if (
+      aOpenWindowInfo &&
+      aOpenWindowInfo.parent &&
+      aOpenWindowInfo.parent.window
+    ) {
       referrerInfo = new ReferrerInfo(
-        aOpener && aOpener.document
-          ? aOpener.document.referrerInfo.referrerPolicy
-          : Ci.nsIReferrerInfo.EMPTY,
+        aOpenWindowInfo.parent.window.document.referrerInfo.referrerPolicy,
         true,
-        aOpener ? makeURI(aOpener.location.href) : null
+        makeURI(aOpenWindowInfo.parent.window.location.href)
       );
+    } else {
+      referrerInfo = new ReferrerInfo(Ci.nsIReferrerInfo.EMPTY, true, null);
     }
 
-    let isPrivate = aOpener
-      ? PrivateBrowsingUtils.isContentWindowPrivate(aOpener)
+    let isPrivate = aOpenWindowInfo
+      ? aOpenWindowInfo.originAttributes.privateBrowsingId != 0
       : PrivateBrowsingUtils.isWindowPrivate(window);
 
     switch (aWhere) {
@@ -6209,13 +6164,10 @@ nsBrowserAccess.prototype = {
         // we can hand back the nsIDOMWindow. The XULBrowserWindow.shouldLoadURI
         // will do the job of shuttling off the newly opened browser to run in
         // the right process once it starts loading a URI.
-        let forceNotRemote = !!aOpener;
-        let userContextId =
-          aOpener && aOpener.document
-            ? aOpener.document.nodePrincipal.originAttributes.userContextId
-            : Ci.nsIScriptSecurityManager.DEFAULT_USER_CONTEXT_ID;
-        let openerWindow =
-          aFlags & Ci.nsIBrowserDOMWindow.OPEN_NO_OPENER ? null : aOpener;
+        let forceNotRemote = aOpenWindowInfo && !aOpenWindowInfo.remote;
+        let userContextId = aOpenWindowInfo
+          ? aOpenWindowInfo.originAttributes.userContextId
+          : Ci.nsIScriptSecurityManager.DEFAULT_USER_CONTEXT_ID;
         let browser = this._openURIInNewTab(
           aURI,
           referrerInfo,
@@ -6223,10 +6175,9 @@ nsBrowserAccess.prototype = {
           isExternal,
           forceNotRemote,
           userContextId,
-          openerWindow,
+          aOpenWindowInfo,
           null,
           aTriggeringPrincipal,
-          0,
           "",
           aCsp,
           aSkipLoad
@@ -6269,7 +6220,6 @@ nsBrowserAccess.prototype = {
     aParams,
     aWhere,
     aFlags,
-    aNextRemoteTabId,
     aName
   ) {
     // Passing a null-URI to only create the content window,
@@ -6280,7 +6230,6 @@ nsBrowserAccess.prototype = {
       aParams,
       aWhere,
       aFlags,
-      aNextRemoteTabId,
       aName,
       true
     );
@@ -6291,7 +6240,6 @@ nsBrowserAccess.prototype = {
     aParams,
     aWhere,
     aFlags,
-    aNextRemoteTabId,
     aName
   ) {
     return this.getContentWindowOrOpenURIInFrame(
@@ -6299,7 +6247,6 @@ nsBrowserAccess.prototype = {
       aParams,
       aWhere,
       aFlags,
-      aNextRemoteTabId,
       aName,
       false
     );
@@ -6310,7 +6257,6 @@ nsBrowserAccess.prototype = {
     aParams,
     aWhere,
     aFlags,
-    aNextRemoteTabId,
     aName,
     aSkipLoad
   ) {
@@ -6334,10 +6280,9 @@ nsBrowserAccess.prototype = {
       isExternal,
       false,
       userContextId,
-      null,
+      aParams.openWindowInfo,
       aParams.openerBrowser,
       aParams.triggeringPrincipal,
-      aNextRemoteTabId,
       aName,
       aParams.csp,
       aSkipLoad
@@ -7161,52 +7106,6 @@ function UpdateCurrentCharset(target) {
   }
 }
 
-function promptRemoveExtension(addon) {
-  let { name } = addon;
-  let brand = document
-    .getElementById("bundle_brand")
-    .getString("brandShorterName");
-  let { getFormattedString, getString } = gNavigatorBundle;
-  let title = getFormattedString("webext.remove.confirmation.title", [name]);
-  let message = getFormattedString("webext.remove.confirmation.message", [
-    name,
-    brand,
-  ]);
-  let btnTitle = getString("webext.remove.confirmation.button");
-  let {
-    BUTTON_TITLE_IS_STRING: titleString,
-    BUTTON_TITLE_CANCEL: titleCancel,
-    BUTTON_POS_0,
-    BUTTON_POS_1,
-    confirmEx,
-  } = Services.prompt;
-  let btnFlags = BUTTON_POS_0 * titleString + BUTTON_POS_1 * titleCancel;
-  let checkboxState = { value: false };
-  let checkboxMessage = null;
-
-  // Enable abuse report checkbox in the remove extension dialog,
-  // if enabled by the about:config prefs and the addon type
-  // is currently supported.
-  if (gAddonAbuseReportEnabled && ["extension", "theme"].includes(addon.type)) {
-    checkboxMessage = getFormattedString(
-      "webext.remove.abuseReportCheckbox.message",
-      [document.getElementById("bundle_brand").getString("vendorShortName")]
-    );
-  }
-  const result = confirmEx(
-    null,
-    title,
-    message,
-    btnFlags,
-    btnTitle,
-    null,
-    null,
-    checkboxMessage,
-    checkboxState
-  );
-  return { remove: result === 0, report: checkboxState.value };
-}
-
 var ToolbarContextMenu = {
   updateDownloadsAutoHide(popup) {
     let checkbox = document.getElementById(
@@ -7273,25 +7172,8 @@ var ToolbarContextMenu = {
 
   async removeExtensionForContextAction(popup) {
     let id = this._getExtensionId(popup);
-    let addon = id && (await AddonManager.getAddonByID(id));
-    if (!addon || !(addon.permissions & AddonManager.PERM_CAN_UNINSTALL)) {
-      return;
-    }
-    let { remove, report } = promptRemoveExtension(addon);
-    AMTelemetry.recordActionEvent({
-      object: "browserAction",
-      action: "uninstall",
-      value: remove ? "accepted" : "cancelled",
-      extra: { addonId: addon.id },
-    });
-    if (remove) {
-      // Leave the extension in pending uninstall if we are also
-      // reporting the add-on.
-      await addon.uninstall(report);
-      if (report) {
-        this.reportExtensionForContextAction(popup, "uninstall");
-      }
-    }
+
+    await BrowserAddonUI.removeAddon(id, "browserAction");
   },
 
   async reportExtensionForContextAction(popup, reportEntryPoint) {
@@ -7300,11 +7182,8 @@ var ToolbarContextMenu = {
     if (!addon) {
       return;
     }
-    const win = await BrowserOpenAddonsMgr("addons://list/extension");
-    win.openAbuseReport({
-      addonId: addon.id,
-      reportEntryPoint,
-    });
+
+    await BrowserAddonUI.reportAddon(addon.id, reportEntryPoint);
   },
 
   openAboutAddonsForContextAction(popup) {

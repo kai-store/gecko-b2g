@@ -75,7 +75,7 @@ class EditorEventListener : public nsIDOMEventListener {
   }
   MOZ_CAN_RUN_SCRIPT virtual nsresult MouseClick(
       WidgetMouseEvent* aMouseClickEvent);
-  nsresult Focus(InternalFocusEvent* aFocusEvent);
+  MOZ_CAN_RUN_SCRIPT nsresult Focus(InternalFocusEvent* aFocusEvent);
   nsresult Blur(InternalFocusEvent* aBlurEvent);
   MOZ_CAN_RUN_SCRIPT nsresult DragEnter(dom::DragEvent* aDragEvent);
   MOZ_CAN_RUN_SCRIPT nsresult DragOverOrDrop(dom::DragEvent* aDragEvent);
@@ -112,7 +112,7 @@ class EditorEventListener : public nsIDOMEventListener {
    * Returns false if the editor is detached from the listener, i.e.,
    * impossible to continue to handle the event.  Otherwise, true.
    */
-  MOZ_MUST_USE bool EnsureCommitComposition();
+  [[nodiscard]] bool EnsureCommitComposition();
 
   EditorBase* mEditorBase;  // weak
   RefPtr<nsCaret> mCaret;

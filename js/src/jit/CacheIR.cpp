@@ -40,9 +40,7 @@ const char* const js::jit::CacheKindNames[] = {
 // We need to enter the namespace here so that the definition of
 // CacheIROpFormat::ArgLengths can see CacheIROpFormat::ArgType
 // (without defining None/Id/Field/etc everywhere else in this file.)
-namespace js {
-namespace jit {
-namespace CacheIROpFormat {
+namespace js::jit::CacheIROpFormat {
 
 static constexpr uint32_t CacheIRArgLength(ArgType arg) {
   switch (arg) {
@@ -62,19 +60,17 @@ static constexpr uint32_t CacheIRArgLength(ArgType arg) {
   }
 }
 template <typename... Args>
-static constexpr uint32_t CacheIRArgLength(ArgType arg, Args... args) {
-  return CacheIRArgLength(arg) + CacheIRArgLength(args...);
+static constexpr uint32_t CacheIRArgsLength(Args... args) {
+  return (CacheIRArgLength(args) + ...);
 }
 
 const uint32_t ArgLengths[] = {
-#define ARGLENGTH(op, ...) CacheIRArgLength(__VA_ARGS__),
+#define ARGLENGTH(op, ...) CacheIRArgsLength(__VA_ARGS__),
     CACHE_IR_OPS(ARGLENGTH)
 #undef ARGLENGTH
 };
 
-}  // namespace CacheIROpFormat
-}  // namespace jit
-}  // namespace js
+}  // namespace js::jit::CacheIROpFormat
 
 void CacheIRWriter::assertSameCompartment(JSObject* obj) {
   cx_->debugOnlyCheck(obj);
@@ -6319,6 +6315,8 @@ AttachDecision UnaryArithIRGenerator::tryAttachStub() {
   TRY_ATTACH(tryAttachInt32());
   TRY_ATTACH(tryAttachNumber());
   TRY_ATTACH(tryAttachBigInt());
+  TRY_ATTACH(tryAttachStringInt32());
+  TRY_ATTACH(tryAttachStringNumber());
 
   trackAttached(IRGenerator::NotAttached);
   return AttachDecision::NoAction;
@@ -6336,6 +6334,10 @@ AttachDecision UnaryArithIRGenerator::tryAttachInt32() {
     case JSOp::BitNot:
       writer.int32NotResult(intId);
       trackAttached("UnaryArith.Int32Not");
+      break;
+    case JSOp::Pos:
+      writer.loadInt32Result(intId);
+      trackAttached("UnaryArith.Int32Pos");
       break;
     case JSOp::Neg:
       writer.int32NegationResult(intId);
@@ -6358,9 +6360,10 @@ AttachDecision UnaryArithIRGenerator::tryAttachInt32() {
 }
 
 AttachDecision UnaryArithIRGenerator::tryAttachNumber() {
-  if (!val_.isNumber() || !res_.isNumber()) {
+  if (!val_.isNumber()) {
     return AttachDecision::NoAction;
   }
+  MOZ_ASSERT(res_.isNumber());
 
   ValOperandId valId(writer.setInputOperandId(0));
   NumberOperandId numId = writer.guardIsNumber(valId);
@@ -6370,6 +6373,10 @@ AttachDecision UnaryArithIRGenerator::tryAttachNumber() {
       truncatedId = writer.truncateDoubleToUInt32(numId);
       writer.int32NotResult(truncatedId);
       trackAttached("UnaryArith.DoubleNot");
+      break;
+    case JSOp::Pos:
+      writer.loadDoubleResult(numId);
+      trackAttached("UnaryArith.DoublePos");
       break;
     case JSOp::Neg:
       writer.doubleNegationResult(numId);
@@ -6395,6 +6402,10 @@ AttachDecision UnaryArithIRGenerator::tryAttachBigInt() {
   if (!val_.isBigInt()) {
     return AttachDecision::NoAction;
   }
+  MOZ_ASSERT(res_.isBigInt());
+
+  MOZ_ASSERT(op_ != JSOp::Pos,
+             "Applying the unary + operator on BigInt values throws an error");
 
   ValOperandId valId(writer.setInputOperandId(0));
   BigIntOperandId bigIntId = writer.guardToBigInt(valId);
@@ -6414,6 +6425,90 @@ AttachDecision UnaryArithIRGenerator::tryAttachBigInt() {
     case JSOp::Dec:
       writer.bigIntDecResult(bigIntId);
       trackAttached("UnaryArith.BigIntDec");
+      break;
+    default:
+      MOZ_CRASH("Unexpected OP");
+  }
+
+  writer.returnFromIC();
+  return AttachDecision::Attach;
+}
+
+AttachDecision UnaryArithIRGenerator::tryAttachStringInt32() {
+  if (!val_.isString()) {
+    return AttachDecision::NoAction;
+  }
+  MOZ_ASSERT(res_.isNumber());
+
+  if (!res_.isInt32()) {
+    return AttachDecision::NoAction;
+  }
+
+  ValOperandId valId(writer.setInputOperandId(0));
+  StringOperandId stringId = writer.guardToString(valId);
+  Int32OperandId intId = writer.guardAndGetInt32FromString(stringId);
+
+  switch (op_) {
+    case JSOp::BitNot:
+      writer.int32NotResult(intId);
+      trackAttached("UnaryArith.StringInt32Not");
+      break;
+    case JSOp::Pos:
+      writer.loadInt32Result(intId);
+      trackAttached("UnaryArith.StringInt32Pos");
+      break;
+    case JSOp::Neg:
+      writer.int32NegationResult(intId);
+      trackAttached("UnaryArith.StringInt32Neg");
+      break;
+    case JSOp::Inc:
+      writer.int32IncResult(intId);
+      trackAttached("UnaryArith.StringInt32Inc");
+      break;
+    case JSOp::Dec:
+      writer.int32DecResult(intId);
+      trackAttached("UnaryArith.StringInt32Dec");
+      break;
+    default:
+      MOZ_CRASH("Unexpected OP");
+  }
+
+  writer.returnFromIC();
+  return AttachDecision::Attach;
+}
+
+AttachDecision UnaryArithIRGenerator::tryAttachStringNumber() {
+  if (!val_.isString()) {
+    return AttachDecision::NoAction;
+  }
+  MOZ_ASSERT(res_.isNumber());
+
+  ValOperandId valId(writer.setInputOperandId(0));
+  StringOperandId stringId = writer.guardToString(valId);
+  NumberOperandId numId = writer.guardAndGetNumberFromString(stringId);
+
+  Int32OperandId truncatedId;
+  switch (op_) {
+    case JSOp::BitNot:
+      truncatedId = writer.truncateDoubleToUInt32(numId);
+      writer.int32NotResult(truncatedId);
+      trackAttached("UnaryArith.StringNumberNot");
+      break;
+    case JSOp::Pos:
+      writer.loadDoubleResult(numId);
+      trackAttached("UnaryArith.StringNumberPos");
+      break;
+    case JSOp::Neg:
+      writer.doubleNegationResult(numId);
+      trackAttached("UnaryArith.StringNumberNeg");
+      break;
+    case JSOp::Inc:
+      writer.doubleIncResult(numId);
+      trackAttached("UnaryArith.StringNumberInc");
+      break;
+    case JSOp::Dec:
+      writer.doubleDecResult(numId);
+      trackAttached("UnaryArith.StringNumberDec");
       break;
     default:
       MOZ_CRASH("Unexpected OP");
@@ -6547,7 +6642,7 @@ AttachDecision BinaryArithIRGenerator::tryAttachBitwise() {
 AttachDecision BinaryArithIRGenerator::tryAttachDouble() {
   // Check valid opcodes
   if (op_ != JSOp::Add && op_ != JSOp::Sub && op_ != JSOp::Mul &&
-      op_ != JSOp::Div && op_ != JSOp::Mod) {
+      op_ != JSOp::Div && op_ != JSOp::Mod && op_ != JSOp::Pow) {
     return AttachDecision::NoAction;
   }
 
@@ -6583,6 +6678,10 @@ AttachDecision BinaryArithIRGenerator::tryAttachDouble() {
       writer.doubleModResult(lhs, rhs);
       trackAttached("BinaryArith.Double.Mod");
       break;
+    case JSOp::Pow:
+      writer.doublePowResult(lhs, rhs);
+      trackAttached("BinaryArith.Double.Pow");
+      break;
     default:
       MOZ_CRASH("Unhandled Op");
   }
@@ -6604,7 +6703,14 @@ AttachDecision BinaryArithIRGenerator::tryAttachInt32() {
   }
 
   if (op_ != JSOp::Add && op_ != JSOp::Sub && op_ != JSOp::Mul &&
-      op_ != JSOp::Div && op_ != JSOp::Mod) {
+      op_ != JSOp::Div && op_ != JSOp::Mod && op_ != JSOp::Pow) {
+    return AttachDecision::NoAction;
+  }
+
+  // x^y where y < 0 is most of the time not an int32, except when y gets large
+  // enough. It's hard to determine when exactly y is "large enough", so we
+  // don't attach an IC for any negative exponent.
+  if (op_ == JSOp::Pow && rhs_.isInt32() && rhs_.toInt32() < 0) {
     return AttachDecision::NoAction;
   }
 
@@ -6642,6 +6748,10 @@ AttachDecision BinaryArithIRGenerator::tryAttachInt32() {
     case JSOp::Mod:
       writer.int32ModResult(lhsIntId, rhsIntId);
       trackAttached("BinaryArith.Int32.Mod");
+      break;
+    case JSOp::Pow:
+      writer.int32PowResult(lhsIntId, rhsIntId);
+      trackAttached("BinaryArith.Int32.Pow");
       break;
     default:
       MOZ_CRASH("Unhandled op in tryAttachInt32");
@@ -6881,7 +6991,15 @@ AttachDecision BinaryArithIRGenerator::tryAttachStringInt32Arith() {
 
   // Must _not_ support Add, because it would be string concatenation instead.
   if (op_ != JSOp::Sub && op_ != JSOp::Mul && op_ != JSOp::Div &&
-      op_ != JSOp::Mod) {
+      op_ != JSOp::Mod && op_ != JSOp::Pow) {
+    return AttachDecision::NoAction;
+  }
+
+  // See tryAttachInt32() for why negative exponents are rejected. We can't
+  // easily determine if a string exponent is negative, so any strings are
+  // rejected as well.
+  if (op_ == JSOp::Pow &&
+      ((rhs_.isInt32() && rhs_.toInt32() < 0) || rhs_.isString())) {
     return AttachDecision::NoAction;
   }
 
@@ -6895,8 +7013,7 @@ AttachDecision BinaryArithIRGenerator::tryAttachStringInt32Arith() {
 
     MOZ_ASSERT(v.isString());
     StringOperandId strId = writer.guardToString(id);
-    NumberOperandId numId = writer.guardAndGetNumberFromString(strId);
-    return writer.guardAndGetInt32FromNumber(numId);
+    return writer.guardAndGetInt32FromString(strId);
   };
 
   Int32OperandId lhsIntId = guardToInt32(lhsId, lhs_);

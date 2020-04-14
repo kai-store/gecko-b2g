@@ -11,10 +11,15 @@
 #include "mozilla/TextUtils.h"
 
 #include "frontend/TokenStream.h"
-#include "irregexp/RegExpParser.h"
+#ifndef ENABLE_NEW_REGEXP
+#  include "irregexp/RegExpParser.h"
+#endif
 #include "jit/InlinableNatives.h"
 #include "js/PropertySpec.h"
 #include "js/RegExpFlags.h"  // JS::RegExpFlag, JS::RegExpFlags
+#ifdef ENABLE_NEW_REGEXP
+#  include "new-regexp/RegExpAPI.h"
+#endif
 #include "util/StringBuffer.h"
 #include "util/Unicode.h"
 #include "vm/JSContext.h"
@@ -138,19 +143,14 @@ static RegExpRunStatus ExecuteRegExpImpl(JSContext* cx, RegExpStatics* res,
                                          MutableHandleRegExpShared re,
                                          HandleLinearString input,
                                          size_t searchIndex,
-                                         VectorMatchPairs* matches,
-                                         size_t* endIndex) {
+                                         VectorMatchPairs* matches) {
   RegExpRunStatus status =
-      RegExpShared::execute(cx, re, input, searchIndex, matches, endIndex);
+      RegExpShared::execute(cx, re, input, searchIndex, matches);
 
   /* Out of spec: Update RegExpStatics. */
   if (status == RegExpRunStatus_Success && res) {
-    if (matches) {
-      if (!res->updateFromMatchPairs(cx, input, *matches)) {
-        return RegExpRunStatus_Error;
-      }
-    } else {
-      res->updateLazily(cx, input, re, searchIndex);
+    if (!res->updateFromMatchPairs(cx, input, *matches)) {
+      return RegExpRunStatus_Error;
     }
   }
   return status;
@@ -169,7 +169,7 @@ bool js::ExecuteRegExpLegacy(JSContext* cx, RegExpStatics* res,
   VectorMatchPairs matches;
 
   RegExpRunStatus status =
-      ExecuteRegExpImpl(cx, res, &shared, input, *lastIndex, &matches, nullptr);
+      ExecuteRegExpImpl(cx, res, &shared, input, *lastIndex, &matches);
   if (status == RegExpRunStatus_Error) {
     return false;
   }
@@ -196,8 +196,12 @@ static bool CheckPatternSyntaxSlow(JSContext* cx, HandleAtom pattern,
   LifoAllocScope allocScope(&cx->tempLifoAlloc());
   CompileOptions options(cx);
   frontend::TokenStream dummyTokenStream(cx, options, nullptr, 0, nullptr);
+#ifdef ENABLE_NEW_REGEXP
+  return irregexp::CheckPatternSyntax(cx, dummyTokenStream, pattern, flags);
+#else
   return irregexp::ParsePatternSyntax(dummyTokenStream, allocScope.alloc(),
                                       pattern, flags.unicode());
+#endif
 }
 
 static RegExpShared* CheckPatternSyntax(JSContext* cx, HandleAtom pattern,
@@ -947,8 +951,7 @@ static bool IsTrailSurrogateWithLeadSurrogate(HandleLinearString input,
  */
 static RegExpRunStatus ExecuteRegExp(JSContext* cx, HandleObject regexp,
                                      HandleString string, int32_t lastIndex,
-                                     VectorMatchPairs* matches,
-                                     size_t* endIndex) {
+                                     VectorMatchPairs* matches) {
   /*
    * WARNING: Despite the presence of spec step comment numbers, this
    *          algorithm isn't consistent with any ES6 version, draft or
@@ -1009,7 +1012,7 @@ static RegExpRunStatus ExecuteRegExp(JSContext* cx, HandleObject regexp,
 
   /* Steps 3, 11-14, except 12.a.i, 12.c.i.1. */
   RegExpRunStatus status =
-      ExecuteRegExpImpl(cx, res, &re, input, lastIndex, matches, endIndex);
+      ExecuteRegExpImpl(cx, res, &re, input, lastIndex, matches);
   if (status == RegExpRunStatus_Error) {
     return RegExpRunStatus_Error;
   }
@@ -1031,7 +1034,7 @@ static bool RegExpMatcherImpl(JSContext* cx, HandleObject regexp,
 
   /* Steps 3, 9-14, except 12.a.i, 12.c.i.1. */
   RegExpRunStatus status =
-      ExecuteRegExp(cx, regexp, string, lastIndex, &matches, nullptr);
+      ExecuteRegExp(cx, regexp, string, lastIndex, &matches);
   if (status == RegExpRunStatus_Error) {
     return false;
   }
@@ -1100,7 +1103,7 @@ static bool RegExpSearcherImpl(JSContext* cx, HandleObject regexp,
 
   /* Steps 3, 9-14, except 12.a.i, 12.c.i.1. */
   RegExpRunStatus status =
-      ExecuteRegExp(cx, regexp, string, lastIndex, &matches, nullptr);
+      ExecuteRegExp(cx, regexp, string, lastIndex, &matches);
   if (status == RegExpRunStatus_Error) {
     return false;
   }
@@ -1179,17 +1182,17 @@ bool js::RegExpTester(JSContext* cx, unsigned argc, Value* vp) {
   MOZ_ALWAYS_TRUE(ToInt32(cx, args[2], &lastIndex));
 
   /* Steps 3, 9-14, except 12.a.i, 12.c.i.1. */
-  size_t endIndex = 0;
+  VectorMatchPairs matches;
   RegExpRunStatus status =
-      ExecuteRegExp(cx, regexp, string, lastIndex, nullptr, &endIndex);
+      ExecuteRegExp(cx, regexp, string, lastIndex, &matches);
 
   if (status == RegExpRunStatus_Error) {
     return false;
   }
 
   if (status == RegExpRunStatus_Success) {
-    MOZ_ASSERT(endIndex <= INT32_MAX);
-    args.rval().setInt32(int32_t(endIndex));
+    int32_t endIndex = matches[0].limit;
+    args.rval().setInt32(endIndex);
   } else {
     args.rval().setInt32(-1);
   }
@@ -1204,13 +1207,12 @@ bool js::RegExpTesterRaw(JSContext* cx, HandleObject regexp, HandleString input,
                          int32_t lastIndex, int32_t* endIndex) {
   MOZ_ASSERT(lastIndex >= 0);
 
-  size_t endIndexTmp = 0;
+  VectorMatchPairs matches;
   RegExpRunStatus status =
-      ExecuteRegExp(cx, regexp, input, lastIndex, nullptr, &endIndexTmp);
+      ExecuteRegExp(cx, regexp, input, lastIndex, &matches);
 
   if (status == RegExpRunStatus_Success) {
-    MOZ_ASSERT(endIndexTmp <= INT32_MAX);
-    *endIndex = int32_t(endIndexTmp);
+    *endIndex = matches[0].limit;
     return true;
   }
   if (status == RegExpRunStatus_Success_NotFound) {

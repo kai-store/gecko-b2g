@@ -16,7 +16,6 @@
 // Local Includes
 // Helper Classes
 #include "nsCOMPtr.h"
-#include "nsAutoPtr.h"
 #include "nsWeakReference.h"
 #include "nsDataHashtable.h"
 #include "nsJSThingHashtable.h"
@@ -123,7 +122,6 @@ class RequestOrUSVString;
 class SharedWorker;
 class Selection;
 class SpeechSynthesis;
-class TabGroup;
 class Timeout;
 class U2F;
 class VisualViewport;
@@ -588,6 +586,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   mozilla::dom::Location* Location() override;
   nsHistory* GetHistory(mozilla::ErrorResult& aError);
   mozilla::dom::CustomElementRegistry* CustomElements() override;
+  mozilla::dom::CustomElementRegistry* GetExistingCustomElements();
   mozilla::dom::BarProp* GetLocationbar(mozilla::ErrorResult& aError);
   mozilla::dom::BarProp* GetMenubar(mozilla::ErrorResult& aError);
   mozilla::dom::BarProp* GetPersonalbar(mozilla::ErrorResult& aError);
@@ -898,8 +897,8 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   void Maximize();
   void Minimize();
   void Restore();
-  int32_t GetWorkspaceID();
-  void MoveToWorkspace(int32_t workspaceID);
+  void GetWorkspaceID(nsAString& workspaceID);
+  void MoveToWorkspace(const nsAString& workspaceID);
   void NotifyDefaultButtonLoaded(mozilla::dom::Element& aDefaultButton,
                                  mozilla::ErrorResult& aError);
   mozilla::dom::ChromeMessageBroadcaster* MessageManager();
@@ -938,8 +937,6 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
 
   nsIDOMWindowUtils* GetWindowUtils(mozilla::ErrorResult& aRv);
 
-  bool HasOpenerForInitialContentBrowser();
-
   void UpdateTopInnerWindow();
 
   virtual bool IsInSyncOperation() override {
@@ -949,7 +946,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   bool IsSharedMemoryAllowed() const override;
 
   // https://whatpr.org/html/4734/structured-data.html#cross-origin-isolated
-  bool CrossOriginIsolated() const;
+  bool CrossOriginIsolated() const override;
 
  protected:
   // Web IDL helpers
@@ -1179,12 +1176,6 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   // nsPIDOMWindow{Inner,Outer} should be able to see these helper methods.
   friend class nsPIDOMWindowInner;
   friend class nsPIDOMWindowOuter;
-
-  mozilla::dom::TabGroup* TabGroupInner();
-
-  // Like TabGroupInner, but it is more tolerant of being called at peculiar
-  // times, and it can return null.
-  mozilla::dom::TabGroup* MaybeTabGroupInner();
 
   bool IsBackgroundInternal() const;
 

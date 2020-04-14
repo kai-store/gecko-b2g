@@ -93,12 +93,11 @@ ClassifierDummyChannel::ClassifierDummyChannel(nsIURI* aURI,
 }
 
 ClassifierDummyChannel::~ClassifierDummyChannel() {
-  NS_ReleaseOnMainThreadSystemGroup("ClassifierDummyChannel::mLoadInfo",
-                                    mLoadInfo.forget());
-  NS_ReleaseOnMainThreadSystemGroup("ClassifierDummyChannel::mURI",
-                                    mURI.forget());
-  NS_ReleaseOnMainThreadSystemGroup("ClassifierDummyChannel::mTopWindowURI",
-                                    mTopWindowURI.forget());
+  NS_ReleaseOnMainThread("ClassifierDummyChannel::mLoadInfo",
+                         mLoadInfo.forget());
+  NS_ReleaseOnMainThread("ClassifierDummyChannel::mURI", mURI.forget());
+  NS_ReleaseOnMainThread("ClassifierDummyChannel::mTopWindowURI",
+                         mTopWindowURI.forget());
 }
 
 void ClassifierDummyChannel::AddClassificationFlags(
@@ -732,6 +731,8 @@ NS_IMETHODIMP ClassifierDummyChannel::IsThirdPartySocialTrackingResource(
           mThirdPartyClassificationFlags);
   return NS_OK;
 }
+
+void ClassifierDummyChannel::DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() {}
 
 }  // namespace net
 }  // namespace mozilla

@@ -40,7 +40,10 @@ using namespace js;
 
 ObjectGroup::ObjectGroup(const JSClass* clasp, TaggedProto proto,
                          JS::Realm* realm, ObjectGroupFlags initialFlags)
-    : clasp_(clasp), proto_(proto), realm_(realm), flags_(initialFlags) {
+    : headerAndClasp_(clasp),
+      proto_(proto),
+      realm_(realm),
+      flags_(initialFlags) {
   /* Windows may not appear on prototype chains. */
   MOZ_ASSERT_IF(proto.isObject(), !IsWindow(proto.toObject()));
   MOZ_ASSERT(JS::StringIsASCII(clasp->name));
@@ -354,7 +357,7 @@ ObjectGroup* JSObject::makeLazyGroup(JSContext* cx, HandleObject obj) {
     group->setInterpretedFunction(&obj->as<JSFunction>());
   }
 
-  obj->group_ = group;
+  obj->setGroupRaw(group);
 
   return group;
 }
@@ -1523,6 +1526,8 @@ bool ObjectGroup::setAllocationSiteObjectGroup(JSContext* cx,
 ArrayObject* ObjectGroup::getOrFixupCopyOnWriteObject(JSContext* cx,
                                                       HandleScript script,
                                                       jsbytecode* pc) {
+  MOZ_ASSERT(IsTypeInferenceEnabled());
+
   // Make sure that the template object for script/pc has a type indicating
   // that the object and its copies have copy on write elements.
   RootedArrayObject obj(

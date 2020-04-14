@@ -71,9 +71,8 @@ struct RegExpByteCodeHeader {
  */
 class RegExpShared : public gc::TenuredCell {
  public:
-  enum CompilationMode { Normal, MatchOnly };
-
   enum ForceByteCodeEnum { DontForceByteCode, ForceByteCode };
+  enum class Kind { Unparsed, Atom, RegExp };
 
   using JitCodeTable = UniquePtr<uint8_t[], JS::FreePolicy>;
   using JitCodeTables = Vector<JitCodeTable, 0, SystemAllocPolicy>;
@@ -97,24 +96,23 @@ class RegExpShared : public gc::TenuredCell {
     }
   };
 
-  RegExpCompilation compilationArray[4];
-
   /* Source to the RegExp, for lazy compilation. */
-  const GCPtrAtom source;
+  using HeaderWithAtom = gc::CellHeaderWithTenuredGCPointer<JSAtom>;
+  HeaderWithAtom headerAndSource;
+
+  RegExpCompilation compilationArray[2];
 
   uint32_t parenCount;
   JS::RegExpFlags flags;
-  bool canStringMatch;
 
-  static int CompilationIndex(CompilationMode mode, bool latin1) {
-    switch (mode) {
-      case Normal:
-        return latin1 ? 0 : 1;
-      case MatchOnly:
-        return latin1 ? 2 : 3;
-    }
-    MOZ_CRASH();
-  }
+#ifdef ENABLE_NEW_REGEXP
+  RegExpShared::Kind kind_ = Kind::Unparsed;
+  GCPtrAtom patternAtom_;
+#else
+  bool canStringMatch = false;
+#endif
+
+  static int CompilationIndex(bool latin1) { return latin1 ? 0 : 1; }
 
   // Tables referenced by JIT code.
   JitCodeTables tables;
@@ -123,33 +121,35 @@ class RegExpShared : public gc::TenuredCell {
   RegExpShared(JSAtom* source, JS::RegExpFlags flags);
 
   static bool compile(JSContext* cx, MutableHandleRegExpShared res,
-                      HandleLinearString input, CompilationMode mode,
-                      ForceByteCodeEnum force);
+                      HandleLinearString input, ForceByteCodeEnum force);
   static bool compile(JSContext* cx, MutableHandleRegExpShared res,
                       HandleAtom pattern, HandleLinearString input,
-                      CompilationMode mode, ForceByteCodeEnum force);
+                      ForceByteCodeEnum force);
 
   static bool compileIfNecessary(JSContext* cx, MutableHandleRegExpShared res,
-                                 HandleLinearString input, CompilationMode mode,
+                                 HandleLinearString input,
                                  ForceByteCodeEnum force);
 
-  const RegExpCompilation& compilation(CompilationMode mode,
-                                       bool latin1) const {
-    return compilationArray[CompilationIndex(mode, latin1)];
+  const RegExpCompilation& compilation(bool latin1) const {
+    return compilationArray[CompilationIndex(latin1)];
   }
 
-  RegExpCompilation& compilation(CompilationMode mode, bool latin1) {
-    return compilationArray[CompilationIndex(mode, latin1)];
+  RegExpCompilation& compilation(bool latin1) {
+    return compilationArray[CompilationIndex(latin1)];
   }
 
  public:
   ~RegExpShared() = delete;
 
-  // Execute this RegExp on input starting from searchIndex, filling in
-  // matches if specified and otherwise only determining if there is a match.
+  static RegExpRunStatus executeAtom(JSContext* cx,
+                                     MutableHandleRegExpShared re,
+                                     HandleLinearString input, size_t start,
+                                     VectorMatchPairs* matches);
+
+  // Execute this RegExp on input starting from searchIndex, filling in matches.
   static RegExpRunStatus execute(JSContext* cx, MutableHandleRegExpShared res,
                                  HandleLinearString input, size_t searchIndex,
-                                 VectorMatchPairs* matches, size_t* endIndex);
+                                 VectorMatchPairs* matches);
 
   // Register a table with this RegExpShared, and take ownership.
   bool addTable(JitCodeTable table) { return tables.append(std::move(table)); }
@@ -157,14 +157,32 @@ class RegExpShared : public gc::TenuredCell {
   /* Accessors */
 
   size_t getParenCount() const {
+#ifdef ENABLE_NEW_REGEXP
+    MOZ_ASSERT(kind() != Kind::Unparsed);
+#else
     MOZ_ASSERT(isCompiled());
+#endif
     return parenCount;
   }
+
+#ifdef ENABLE_NEW_REGEXP
+  RegExpShared::Kind kind() const { return kind_; }
+
+  // Use simple string matching for this regexp.
+  void useAtomMatch(HandleAtom pattern);
+#endif
 
   /* Accounts for the "0" (whole match) pair. */
   size_t pairCount() const { return getParenCount() + 1; }
 
-  JSAtom* getSource() const { return source; }
+  JSAtom* getSource() const { return headerAndSource.ptr(); }
+
+#ifdef ENABLE_NEW_REGEXP
+  JSAtom* patternAtom() const { return patternAtom_; }
+#else
+  JSAtom* patternAtom() const { return getSource(); }
+#endif
+
   JS::RegExpFlags getFlags() const { return flags; }
 
   bool global() const { return flags.global(); }
@@ -174,20 +192,20 @@ class RegExpShared : public gc::TenuredCell {
   bool unicode() const { return flags.unicode(); }
   bool sticky() const { return flags.sticky(); }
 
-  bool isCompiled(CompilationMode mode, bool latin1,
+  bool isCompiled(bool latin1,
                   ForceByteCodeEnum force = DontForceByteCode) const {
-    return compilation(mode, latin1).compiled(force);
+    return compilation(latin1).compiled(force);
   }
-  bool isCompiled() const {
-    return isCompiled(Normal, true) || isCompiled(Normal, false) ||
-           isCompiled(MatchOnly, true) || isCompiled(MatchOnly, false);
-  }
+  bool isCompiled() const { return isCompiled(true) || isCompiled(false); }
 
   void traceChildren(JSTracer* trc);
   void discardJitCode();
   void finalize(JSFreeOp* fop);
 
-  static size_t offsetOfSource() { return offsetof(RegExpShared, source); }
+  static size_t offsetOfSource() {
+    return offsetof(RegExpShared, headerAndSource) +
+           HeaderWithAtom::offsetOfPtr();
+  }
 
   static size_t offsetOfFlags() { return offsetof(RegExpShared, flags); }
 
@@ -195,14 +213,9 @@ class RegExpShared : public gc::TenuredCell {
     return offsetof(RegExpShared, parenCount);
   }
 
-  static size_t offsetOfLatin1JitCode(CompilationMode mode) {
+  static size_t offsetOfJitCode(bool latin1) {
     return offsetof(RegExpShared, compilationArray) +
-           (CompilationIndex(mode, true) * sizeof(RegExpCompilation)) +
-           offsetof(RegExpCompilation, jitCode);
-  }
-  static size_t offsetOfTwoByteJitCode(CompilationMode mode) {
-    return offsetof(RegExpShared, compilationArray) +
-           (CompilationIndex(mode, false) * sizeof(RegExpCompilation)) +
+           (CompilationIndex(latin1) * sizeof(RegExpCompilation)) +
            offsetof(RegExpCompilation, jitCode);
   }
 
@@ -210,8 +223,12 @@ class RegExpShared : public gc::TenuredCell {
 
 #ifdef DEBUG
   static bool dumpBytecode(JSContext* cx, MutableHandleRegExpShared res,
-                           bool match_only, HandleLinearString input);
+                           HandleLinearString input);
 #endif
+
+ public:
+  static const JS::TraceKind TraceKind = JS::TraceKind::RegExpShared;
+  const gc::CellHeader& cellHeader() const { return headerAndSource; }
 };
 
 class RegExpZone {

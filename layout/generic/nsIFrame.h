@@ -71,6 +71,7 @@
 #include "Visibility.h"
 #include "nsChangeHint.h"
 #include "mozilla/ComputedStyleInlines.h"
+#include "mozilla/EnumSet.h"
 #include "mozilla/gfx/CompositorHitTestInfo.h"
 #include "mozilla/gfx/MatrixFwd.h"
 #include "nsDisplayItemTypes.h"
@@ -1020,8 +1021,8 @@ class nsIFrame : public nsQueryFrame {
     return ContentSize(GetWritingMode());
   }
   mozilla::LogicalSize ContentSize(mozilla::WritingMode aWritingMode) const {
-    auto bp = GetLogicalUsedBorderAndPadding(aWritingMode);
-    bp.ApplySkipSides(GetLogicalSkipSides());
+    const auto bp = GetLogicalUsedBorderAndPadding(aWritingMode)
+                        .ApplySkipSides(GetLogicalSkipSides());
     return GetLogicalSize(aWritingMode) - bp.Size(aWritingMode);
   }
 
@@ -2039,7 +2040,7 @@ class nsIFrame : public nsQueryFrame {
    *
    * Returns whether the image was in fact associated with the frame.
    */
-  MOZ_MUST_USE bool AssociateImage(const mozilla::StyleImage&);
+  [[nodiscard]] bool AssociateImage(const mozilla::StyleImage&);
 
   /**
    * This needs to be called if the above caller returned true, once the above
@@ -3719,7 +3720,7 @@ class nsIFrame : public nsQueryFrame {
   }
 
   template <typename T>
-  MOZ_MUST_USE FrameProperties::PropertyType<T> TakeProperty(
+  [[nodiscard]] FrameProperties::PropertyType<T> TakeProperty(
       FrameProperties::Descriptor<T> aProperty, bool* aFoundResult = nullptr) {
     return mProperties.Take(aProperty, aFoundResult);
   }
@@ -4594,25 +4595,6 @@ class nsIFrame : public nsQueryFrame {
   static_assert(sizeof(PeekOffsetCharacterOptions) <= sizeof(intptr_t),
                 "aOptions should be changed to const reference");
 
-  /**
-   * Search the frame for the next word boundary
-   * @param  aForward [in] Are we moving forward (or backward) in content order.
-   * @param  aWordSelectEatSpace [in] true: look for non-whitespace following
-   *         whitespace (in the direction of movement).
-   *         false: look for whitespace following non-whitespace (in the
-   *         direction  of movement).
-   * @param  aIsKeyboardSelect [in] Was the action initiated by a keyboard
-   * operation? If true, punctuation immediately following a word is considered
-   * part of that word. Otherwise, a sequence of punctuation is always
-   * considered as a word on its own.
-   * @param  aOffset [in/out] At what offset into the frame to start looking.
-   *         on output - what offset was reached (whether or not we found a
-   * place to stop).
-   * @param  aState [in/out] the state that is carried from frame to frame
-   * @return true: An appropriate offset was found within this frame,
-   *         and is given by aOffset.
-   *         false: Not found within this frame, need to try the next frame.
-   */
   struct PeekWordState {
     // true when we're still at the start of the search, i.e., we can't return
     // this point as a valid offset!
@@ -4650,6 +4632,23 @@ class nsIFrame : public nsQueryFrame {
       mAtStart = false;
     }
   };
+
+  /**
+   * Search the frame for the next word boundary
+   * @param  aForward [in] Are we moving forward (or backward) in content order.
+   * @param  aWordSelectEatSpace [in] true: look for non-whitespace following
+   *         whitespace (in the direction of movement).
+   *         false: look for whitespace following non-whitespace (in the
+   *         direction  of movement).
+   * @param  aIsKeyboardSelect [in] Was the action initiated by a keyboard
+   * operation? If true, punctuation immediately following a word is considered
+   * part of that word. Otherwise, a sequence of punctuation is always
+   * considered as a word on its own.
+   * @param  aOffset [in/out] At what offset into the frame to start looking.
+   *         on output - what offset was reached (whether or not we found a
+   * place to stop).
+   * @param  aState [in/out] the state that is carried from frame to frame
+   */
   virtual FrameSearchResult PeekOffsetWord(
       bool aForward, bool aWordSelectEatSpace, bool aIsKeyboardSelect,
       int32_t* aOffset, PeekWordState* aState, bool aTrimSpaces) = 0;
@@ -4732,22 +4731,44 @@ class nsIFrame : public nsQueryFrame {
   }
   void ListTag(FILE* out) const { fputs(ListTag().get(), out); }
   nsAutoCString ListTag() const;
+
+  enum class ListFlag{TraverseSubdocumentFrames, DisplayInCSSPixels};
+  using ListFlags = mozilla::EnumSet<ListFlag>;
+
+  template <typename T>
+  static std::string ConvertToString(const T& aValue, ListFlags aFlags) {
+    // This method can convert all physical types in app units to CSS pixels.
+    return aFlags.contains(ListFlag::DisplayInCSSPixels)
+               ? mozilla::ToString(mozilla::CSSPixel::FromAppUnits(aValue))
+               : mozilla::ToString(aValue);
+  }
+  static std::string ConvertToString(const mozilla::LogicalRect& aRect,
+                                     const mozilla::WritingMode aWM,
+                                     ListFlags aFlags);
+  static std::string ConvertToString(const mozilla::LogicalSize& aSize,
+                                     const mozilla::WritingMode aWM,
+                                     ListFlags aFlags);
+
   void ListGeneric(nsACString& aTo, const char* aPrefix = "",
-                   uint32_t aFlags = 0) const;
-  enum {TRAVERSE_SUBDOCUMENT_FRAMES = 0x01};
+                   ListFlags aFlags = ListFlags()) const;
   virtual void List(FILE* out = stderr, const char* aPrefix = "",
-                    uint32_t aFlags = 0) const;
+                    ListFlags aFlags = ListFlags()) const;
+
   virtual void ListWithMatchedRules(FILE* out = stderr,
                                     const char* aPrefix = "") const;
   void ListMatchedRules(FILE* out, const char* aPrefix) const;
+
   /**
-   * lists the frames beginning from the root frame
-   * - calls root frame's List(...)
+   * Dump the frame tree beginning from the root frame.
    */
-  static void RootFrameList(nsPresContext* aPresContext, FILE* out = stderr,
-                            const char* aPrefix = "");
-  virtual void DumpFrameTree() const;
+  void DumpFrameTree() const;
+  void DumpFrameTreeInCSSPixels() const;
+
+  /**
+   * Dump the frame tree beginning from ourselves.
+   */
   void DumpFrameTreeLimited() const;
+  void DumpFrameTreeLimitedInCSSPixels() const;
 
   virtual nsresult GetFrameName(nsAString& aResult) const = 0;
 #endif

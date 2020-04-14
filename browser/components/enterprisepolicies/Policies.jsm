@@ -1071,6 +1071,21 @@ var Policies = {
     // Handled in nsToolkitProfileService.cpp (Windows only)
   },
 
+  LegacySameSiteCookieBehaviorEnabled: {
+    onBeforeAddons(manager, param) {
+      setDefaultPref("network.cookie.sameSite.laxByDefault", !param);
+    },
+  },
+
+  LegacySameSiteCookieBehaviorEnabledForDomainList: {
+    onBeforeAddons(manager, param) {
+      setDefaultPref(
+        "network.cookie.sameSite.laxByDefault.disabledHosts",
+        param.join(",")
+      );
+    },
+  },
+
   LocalFileLinks: {
     onBeforeAddons(manager, param) {
       // If there are existing capabilities, lock them with the policy pref.
@@ -1146,7 +1161,6 @@ var Policies = {
     onBeforeUIStartup(manager, param) {
       if (!param) {
         blockAboutPage(manager, "about:logins", true);
-        gBlockedChromePages.push("passwordManager.xhtml");
         setAndLockPref("pref.privacy.disable_button.view_passwords", true);
       }
       setAndLockPref("signon.rememberSignons", param);

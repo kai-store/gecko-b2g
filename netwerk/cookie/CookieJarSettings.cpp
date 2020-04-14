@@ -10,8 +10,8 @@
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/net/CookieJarSettings.h"
 #include "mozilla/net/NeckoChannelParams.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/StaticPrefs_network.h"
-#include "mozilla/SystemGroup.h"
 #include "mozilla/Unused.h"
 #include "nsGlobalWindowInner.h"
 #if defined(MOZ_THUNDERBIRD) || defined(MOZ_SUITE)
@@ -30,7 +30,7 @@ namespace {
 
 class PermissionComparator {
  public:
-  bool Equals(nsIPermission* aA, nsIPermission* aB) const {
+  static bool Equals(nsIPermission* aA, nsIPermission* aB) {
     nsCOMPtr<nsIPrincipal> principalA;
     nsresult rv = aA->GetPrincipal(getter_AddRefs(principalA));
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -116,14 +116,10 @@ CookieJarSettings::CookieJarSettings(uint32_t aCookieBehavior, State aState)
 
 CookieJarSettings::~CookieJarSettings() {
   if (!NS_IsMainThread() && !mCookiePermissions.IsEmpty()) {
-    nsCOMPtr<nsIEventTarget> systemGroupEventTarget =
-        mozilla::SystemGroup::EventTargetFor(mozilla::TaskCategory::Other);
-    MOZ_ASSERT(systemGroupEventTarget);
-
     RefPtr<Runnable> r = new ReleaseCookiePermissions(mCookiePermissions);
     MOZ_ASSERT(mCookiePermissions.IsEmpty());
 
-    systemGroupEventTarget->Dispatch(r.forget());
+    SchedulerGroup::Dispatch(TaskCategory::Other, r.forget());
   }
 }
 
@@ -134,10 +130,10 @@ CookieJarSettings::GetCookieBehavior(uint32_t* aCookieBehavior) {
 }
 
 NS_IMETHODIMP
-CookieJarSettings::GetRejectThirdPartyTrackers(
-    bool* aRejectThirdPartyTrackers) {
-  *aRejectThirdPartyTrackers =
-      CookieJarSettings::IsRejectThirdPartyTrackers(mCookieBehavior);
+CookieJarSettings::GetRejectThirdPartyContexts(
+    bool* aRejectThirdPartyContexts) {
+  *aRejectThirdPartyContexts =
+      CookieJarSettings::IsRejectThirdPartyContexts(mCookieBehavior);
   return NS_OK;
 }
 
@@ -406,10 +402,18 @@ void CookieJarSettings::UpdateIsOnContentBlockingAllowList(
 }
 
 // static
-bool CookieJarSettings::IsRejectThirdPartyTrackers(uint32_t aCookieBehavior) {
+bool CookieJarSettings::IsRejectThirdPartyContexts(uint32_t aCookieBehavior) {
   return aCookieBehavior == nsICookieService::BEHAVIOR_REJECT_TRACKER ||
          aCookieBehavior ==
-             nsICookieService::BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN;
+             nsICookieService::BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN ||
+         IsRejectThirdPartyWithExceptions(aCookieBehavior);
+}
+
+// static
+bool CookieJarSettings::IsRejectThirdPartyWithExceptions(
+    uint32_t aCookieBehavior) {
+  return aCookieBehavior == nsICookieService::BEHAVIOR_REJECT_FOREIGN &&
+         StaticPrefs::network_cookie_rejectForeignWithExceptions_enabled();
 }
 
 NS_IMPL_ISUPPORTS(CookieJarSettings, nsICookieJarSettings)

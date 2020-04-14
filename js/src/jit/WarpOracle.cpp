@@ -6,9 +6,11 @@
 
 #include "jit/WarpOracle.h"
 
+#include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/ScopeExit.h"
 
 #include "jit/JitScript.h"
+#include "jit/JitSpewer.h"
 #include "jit/MIRGenerator.h"
 #include "jit/WarpBuilder.h"
 #include "vm/BytecodeIterator.h"
@@ -45,6 +47,14 @@ mozilla::GenericErrorResult<AbortReason> WarpOracle::abort(AbortReason r,
 }
 
 AbortReasonOr<WarpSnapshot*> WarpOracle::createSnapshot() {
+  JitSpew(JitSpew_IonScripts,
+          "Warp %sompiling script %s:%u:%u (%p) (warmup-counter=%" PRIu32
+          ", level=%s)",
+          (script_->hasIonScript() ? "Rec" : "C"), script_->filename(),
+          script_->lineno(), script_->column(), static_cast<JSScript*>(script_),
+          script_->getWarmUpCount(),
+          OptimizationLevelString(mirGen_.optimizationInfo().level()));
+
   WarpScriptSnapshot* scriptSnapshot;
   MOZ_TRY_VAR(scriptSnapshot, createScriptSnapshot(script_));
 
@@ -53,13 +63,15 @@ AbortReasonOr<WarpSnapshot*> WarpOracle::createSnapshot() {
     return abort(AbortReason::Alloc);
   }
 
+#ifdef JS_JITSPEW
+  if (JitSpewEnabled(JitSpew_WarpSnapshots)) {
+    Fprinter& out = JitSpewPrinter();
+    snapshot->dump(out);
+  }
+#endif
+
   return snapshot;
 }
-
-WarpSnapshot::WarpSnapshot(JSContext* cx, WarpScriptSnapshot* script)
-    : script_(script),
-      globalLexicalEnv_(&cx->global()->lexicalEnvironment()),
-      globalLexicalEnvThis_(globalLexicalEnv_->thisValue()) {}
 
 template <typename T, typename... Args>
 static MOZ_MUST_USE bool AddOpSnapshot(TempAllocator& alloc,
@@ -100,20 +112,17 @@ static MOZ_MUST_USE bool AddWarpGetImport(TempAllocator& alloc,
 
 AbortReasonOr<WarpEnvironment> WarpOracle::createEnvironment(
     HandleScript script) {
-  WarpEnvironment env;
-
   // Don't do anything if the script doesn't use the environment chain.
   // Always make an environment chain if the script needs an arguments object
   // because ArgumentsObject construction requires the environment chain to be
   // passed in.
   if (!script->jitScript()->usesEnvironmentChain() && !script->needsArgsObj()) {
-    MOZ_ASSERT(env.kind() == WarpEnvironment::Kind::None);
-    return env;
+    return WarpEnvironment(NoEnvironment());
   }
 
   if (ModuleObject* module = script->module()) {
-    env.initConstantObject(&module->initialEnvironment());
-    return env;
+    JSObject* obj = &module->initialEnvironment();
+    return WarpEnvironment(ConstantObjectEnvironment(obj));
   }
 
   JSFunction* fun = script->function();
@@ -122,8 +131,8 @@ AbortReasonOr<WarpEnvironment> WarpOracle::createEnvironment(
     // chain is the global lexical environment.
     MOZ_ASSERT(!script->isForEval());
     MOZ_ASSERT(!script->hasNonSyntacticScope());
-    env.initConstantObject(&script->global().lexicalEnvironment());
-    return env;
+    JSObject* obj = &script->global().lexicalEnvironment();
+    return WarpEnvironment(ConstantObjectEnvironment(obj));
   }
 
   // TODO: Parameter expression-induced extra var environment not
@@ -147,24 +156,9 @@ AbortReasonOr<WarpEnvironment> WarpOracle::createEnvironment(
     namedLambdaTemplate = &templateEnv->as<LexicalEnvironmentObject>();
   }
 
-  env.initFunction(callObjectTemplate, namedLambdaTemplate);
-  return env;
+  return WarpEnvironment(
+      FunctionEnvironment(callObjectTemplate, namedLambdaTemplate));
 }
-
-WarpScriptSnapshot::WarpScriptSnapshot(
-    JSScript* script, const WarpEnvironment& env,
-    WarpOpSnapshotList&& opSnapshots, ModuleObject* moduleObject,
-    JSObject* instrumentationCallback,
-    mozilla::Maybe<int32_t> instrumentationScriptId,
-    mozilla::Maybe<bool> instrumentationActive)
-    : script_(script),
-      environment_(env),
-      opSnapshots_(std::move(opSnapshots)),
-      moduleObject_(moduleObject),
-      instrumentationCallback_(instrumentationCallback),
-      instrumentationScriptId_(instrumentationScriptId),
-      instrumentationActive_(instrumentationActive),
-      isArrowFunction_(script->isFunction() && script->function()->isArrow()) {}
 
 AbortReasonOr<WarpScriptSnapshot*> WarpOracle::createScriptSnapshot(
     HandleScript script) {
@@ -178,7 +172,7 @@ AbortReasonOr<WarpScriptSnapshot*> WarpOracle::createScriptSnapshot(
     return abort(AbortReason::Disable, "Try-finally not supported");
   }
 
-  WarpEnvironment environment;
+  WarpEnvironment environment{NoEnvironment()};
   MOZ_TRY_VAR(environment, createEnvironment(script));
 
   // Unfortunately LinkedList<> asserts the list is empty in its destructor.
@@ -282,6 +276,8 @@ AbortReasonOr<WarpScriptSnapshot*> WarpOracle::createScriptSnapshot(
       }
 
       case JSOp::NewArrayCopyOnWrite: {
+        MOZ_CRASH("Bug 1626854: COW arrays disabled without TI for now");
+
         // Fix up the copy-on-write ArrayObject if needed.
         jsbytecode* pc = loc.toRawBytecode();
         if (!ObjectGroup::getOrFixupCopyOnWriteObject(cx_, script, pc)) {

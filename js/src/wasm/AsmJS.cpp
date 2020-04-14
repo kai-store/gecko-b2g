@@ -1353,7 +1353,7 @@ class MOZ_STACK_CLASS JS_HAZ_ROOTED ModuleValidatorShared {
                      /* ref types */ false, /* gc types */ false,
                      /* huge memory */ false, /* bigint */ false),
         env_(&compilerEnv_, Shareable::False, ModuleKind::AsmJS) {
-    compilerEnv_.computeParameters(/* gc types */ false);
+    compilerEnv_.computeParameters();
     env_.minMemoryLength = RoundUpToNextValidAsmJSHeapLength(0);
   }
 
@@ -1725,7 +1725,7 @@ class MOZ_STACK_CLASS JS_HAZ_ROOTED ModuleValidatorShared {
       return false;
     }
     seg->tableIndex = tableIndex;
-    seg->offsetIfActive = Some(InitExpr(LitVal(uint32_t(0))));
+    seg->offsetIfActive = Some(InitExpr::fromConstant(LitVal(uint32_t(0))));
     seg->elemFuncIndices = std::move(elems);
     return env_.elemSegments.append(std::move(seg));
   }
@@ -7116,7 +7116,7 @@ static bool DoCompileAsmJS(JSContext* cx, AsmJSParser<Unit>& parser,
   // generating bytecode for asm.js functions, allowing this asm.js module
   // function to be the finished result.
   MOZ_ASSERT(funbox->isInterpreted());
-  funbox->clobberFunction(moduleFun);
+  funbox->setAsmJSModule(moduleFun);
 
   // Success! Write to the console with a "warning" message indicating
   // total compilation time.

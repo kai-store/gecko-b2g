@@ -55,6 +55,7 @@ const WIFI_CMD_STOP_RSSI_MONITORING = Ci.nsIWifiCommand.STOP_RSSI_MONITORING;
 const WIFI_CMD_START_SOFTAP = Ci.nsIWifiCommand.START_SOFTAP;
 const WIFI_CMD_STOP_SOFTAP = Ci.nsIWifiCommand.STOP_SOFTAP;
 const WIFI_CMD_GET_AP_IFACE = Ci.nsIWifiCommand.GET_AP_IFACE;
+const WIFI_CMD_GET_SOFTAP_STATION_NUMBER = Ci.nsIWifiCommand.GET_SOFTAP_STATION_NUMBER;
 
 this.WifiCommand = function(aControlMessage, aInterface, aSdkVersion) {
   function debug(msg) {
@@ -226,7 +227,12 @@ this.WifiCommand = function(aControlMessage, aInterface, aSdkVersion) {
   };
 
   command.startSoftap = function(config, callback) {
-    doSetCommand(WIFI_CMD_START_SOFTAP, "softapConfig", config, callback);
+    let msg = {
+      cmd: WIFI_CMD_START_SOFTAP,
+      iface: aInterface,
+      softapConfig: config,
+    };
+    aControlMessage(msg, callback);
   };
 
   command.stopSoftap = function(callback) {
@@ -235,6 +241,10 @@ this.WifiCommand = function(aControlMessage, aInterface, aSdkVersion) {
 
   command.getSoftapInterface = function(callback) {
     doGetCommand(WIFI_CMD_GET_AP_IFACE, callback);
+  };
+
+  command.getSoftapInterface = function(callback) {
+    doGetCommand(WIFI_CMD_GET_SOFTAP_STATION_NUMBER, callback);
   };
 
   //----------------------------------------------------------

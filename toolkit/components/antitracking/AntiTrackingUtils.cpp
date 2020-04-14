@@ -8,13 +8,18 @@
 
 #include "AntiTrackingLog.h"
 #include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/net/CookieJarSettings.h"
 #include "mozilla/dom/Document.h"
+#include "mozilla/dom/WindowGlobalParent.h"
+#include "mozilla/dom/WindowContext.h"
+#include "mozilla/net/NeckoChannelParams.h"
 #include "nsIChannel.h"
 #include "nsIPermission.h"
 #include "nsIURI.h"
 #include "nsNetUtil.h"
 #include "nsPermissionManager.h"
 #include "nsPIDOMWindow.h"
+#include "nsSandboxFlags.h"
 #include "nsScriptSecurityManager.h"
 
 #define ANTITRACKING_PERM_KEY "3rdPartyStorage"
@@ -245,19 +250,21 @@ bool AntiTrackingUtils::CheckStoragePermission(nsIPrincipal* aPrincipal,
   }
 
   int32_t cookieBehavior = cookieJarSettings->GetCookieBehavior();
+
+  bool rejectForeignWithExceptions =
+      net::CookieJarSettings::IsRejectThirdPartyWithExceptions(cookieBehavior);
+
   // We only need to check the storage permission if the cookie behavior is
-  // either BEHAVIOR_REJECT_TRACKER or
-  // BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN. Because ContentBlocking
-  // wouldn't update or check the storage permission if the cookie behavior is
-  // not belongs to these two.
-  if (cookieBehavior != nsICookieService::BEHAVIOR_REJECT_TRACKER &&
-      cookieBehavior !=
-          nsICookieService::BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN) {
+  // BEHAVIOR_REJECT_TRACKER, BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN or
+  // BEHAVIOR_REJECT_FOREIGN. Because ContentBlocking wouldn't update or check
+  // the storage permission if the cookie behavior is not belongs to these two.
+  if (!net::CookieJarSettings::IsRejectThirdPartyContexts(cookieBehavior)) {
     return false;
   }
 
   nsCOMPtr<nsIPrincipal> targetPrincipal =
-      (cookieBehavior == nsICookieService::BEHAVIOR_REJECT_TRACKER)
+      (cookieBehavior == nsICookieService::BEHAVIOR_REJECT_TRACKER ||
+       rejectForeignWithExceptions)
           ? loadInfo->GetTopLevelStorageAreaPrincipal()
           : loadInfo->GetTopLevelPrincipal();
 
@@ -271,7 +278,7 @@ bool AntiTrackingUtils::CheckStoragePermission(nsIPrincipal* aPrincipal,
     }
 
     // We try to use the loading principal if there is no TopLevelPrincipal.
-    targetPrincipal = loadInfo->LoadingPrincipal();
+    targetPrincipal = loadInfo->GetLoadingPrincipal();
   }
 
   if (!targetPrincipal) {
@@ -321,4 +328,53 @@ bool AntiTrackingUtils::CheckStoragePermission(nsIPrincipal* aPrincipal,
   return AntiTrackingUtils::CheckStoragePermission(
       targetPrincipal, type, NS_UsePrivateBrowsing(aChannel), &unusedReason,
       unusedReason);
+}
+
+uint64_t AntiTrackingUtils::GetTopLevelAntiTrackingWindowId(
+    BrowsingContext* aBrowsingContext) {
+  MOZ_ASSERT(aBrowsingContext);
+
+  RefPtr<WindowContext> winContext =
+      aBrowsingContext->GetCurrentWindowContext();
+  if (!winContext) {
+    return 0;
+  }
+
+  Maybe<net::CookieJarSettingsArgs> cookieJarSettings =
+      winContext->GetCookieJarSettings();
+  if (cookieJarSettings.isNothing()) {
+    return 0;
+  }
+
+  // Do not check BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN her because when
+  // a third-party subresource is inside the main frame, we need to return the
+  // top-level window id to partition its cookies correctly.
+  uint32_t behavior = cookieJarSettings->cookieBehavior();
+  if (behavior == nsICookieService::BEHAVIOR_REJECT_TRACKER &&
+      aBrowsingContext->IsTop()) {
+    return 0;
+  }
+
+  return aBrowsingContext->Top()->GetCurrentInnerWindowId();
+}
+
+uint64_t AntiTrackingUtils::GetTopLevelStorageAreaWindowId(
+    BrowsingContext* aBrowsingContext) {
+  MOZ_ASSERT(aBrowsingContext);
+
+  if (Document::StorageAccessSandboxed(aBrowsingContext->GetSandboxFlags())) {
+    return 0;
+  }
+
+  BrowsingContext* parentBC = aBrowsingContext->GetParent();
+  if (!parentBC) {
+    // No parent browsing context available!
+    return 0;
+  }
+
+  if (!parentBC->IsTop()) {
+    return 0;
+  }
+
+  return parentBC->GetCurrentInnerWindowId();
 }

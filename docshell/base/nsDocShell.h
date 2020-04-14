@@ -29,7 +29,6 @@
 #include "mozilla/dom/ProfileTimelineMarkerBinding.h"
 #include "mozilla/dom/WindowProxyHolder.h"
 #include "mozilla/gfx/Matrix.h"
-#include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsCRT.h"
 #include "nsCharsetSource.h"
@@ -83,6 +82,7 @@ class nsISecureBrowserUI;
 class nsISHistory;
 class nsIStringBundle;
 class nsIURIFixup;
+class nsIURIFixupInfo;
 class nsIURILoader;
 class nsIWebBrowserFind;
 class nsIWidget;
@@ -431,7 +431,7 @@ class nsDocShell final : public nsDocLoader,
   }
 
   const mozilla::OriginAttributes& GetOriginAttributes() {
-    return mOriginAttributes;
+    return mBrowsingContext->OriginAttributesRef();
   }
 
   // Determine whether this docshell corresponds to the given history entry,
@@ -491,8 +491,8 @@ class nsDocShell final : public nsDocLoader,
   // to transfer the resulting channel into the final process.
   static nsresult CreateRealChannelForDocument(
       nsIChannel** aChannel, nsIURI* aURI, nsILoadInfo* aLoadInfo,
-      nsIInterfaceRequestor* aCallbacks,
-      nsLoadFlags aLoadFlags, const nsAString& aSrcdoc, nsIURI* aBaseURI);
+      nsIInterfaceRequestor* aCallbacks, nsLoadFlags aLoadFlags,
+      const nsAString& aSrcdoc, nsIURI* aBaseURI);
 
   // Creates a real (not DocumentChannel) channel, and configures it using the
   // supplied nsDocShellLoadState.
@@ -529,6 +529,8 @@ class nsDocShell final : public nsDocLoader,
    */
   static void ExtractLastVisit(nsIChannel* aChannel, nsIURI** aURI,
                                uint32_t* aChannelRedirectFlags);
+
+  bool HasContentViewer() const { return !!mContentViewer; }
 
   static uint32_t ComputeURILoaderFlags(
       mozilla::dom::BrowsingContext* aBrowsingContext, uint32_t aLoadType);
@@ -711,14 +713,6 @@ class nsDocShell final : public nsDocLoader,
   // In this case it is the caller's responsibility to ensure
   // FireOnLocationChange is called.
   // In all other cases false is returned.
-  bool OnLoadingSite(nsIChannel* aChannel, bool aFireOnLocationChange,
-                     bool aAddToGlobalHistory = true);
-
-  // Returns true if would have called FireOnLocationChange,
-  // but did not because aFireOnLocationChange was false on entry.
-  // In this case it is the caller's responsibility to ensure
-  // FireOnLocationChange is called.
-  // In all other cases false is returned.
   // Either aChannel or aTriggeringPrincipal must be null. If aChannel is
   // present, the owner should be gotten from it.
   // If OnNewURI calls AddToSessionHistory, it will pass its
@@ -833,6 +827,10 @@ class nsDocShell final : public nsDocLoader,
   void SavePreviousRedirectsAndLastVisit(
       nsIChannel* aChannel, nsIURI* aURI, uint32_t aChannelRedirectFlags,
       const nsTArray<mozilla::net::DocumentChannelRedirect>& aRedirects);
+
+  already_AddRefed<nsIURIFixupInfo> KeywordToURI(const nsACString& aKeyword,
+                                                 bool aIsPrivateContext,
+                                                 nsIInputStream** aPostData);
 
   // Sets the current document's current state object to the given SHEntry's
   // state object. The current state object is eventually given to the page
@@ -988,10 +986,6 @@ class nsDocShell final : public nsDocLoader,
   // Convenience method for getting our parent docshell. Can return null
   already_AddRefed<nsDocShell> GetInProcessParentDocshell();
 
-  // Helper assertion to enforce that mInPrivateBrowsing is in sync with
-  // OriginAttributes.mPrivateBrowsingId
-  void AssertOriginAttributesMatchPrivateBrowsing();
-
   // Internal implementation of nsIDocShell::FirePageHideNotification.
   // If aSkipCheckingDynEntries is true, it will not try to remove dynamic
   // subframe entries. This is to avoid redundant RemoveDynEntries calls in all
@@ -999,9 +993,8 @@ class nsDocShell final : public nsDocLoader,
   void FirePageHideNotificationInternal(bool aIsUnload,
                                         bool aSkipCheckingDynEntries);
 
-  // Dispatch a runnable to the TabGroup associated to this docshell.
-  nsresult DispatchToTabGroup(mozilla::TaskCategory aCategory,
-                              already_AddRefed<nsIRunnable>&& aRunnable);
+  nsresult Dispatch(mozilla::TaskCategory aCategory,
+                    already_AddRefed<nsIRunnable>&& aRunnable);
 
   void SetupReferrerInfoFromChannel(nsIChannel* aChannel);
   void SetReferrerInfo(nsIReferrerInfo* aReferrerInfo);
@@ -1096,22 +1089,21 @@ class nsDocShell final : public nsDocLoader,
   nsresult HandleSameDocumentNavigation(nsDocShellLoadState* aLoadState,
                                         SameDocumentNavigationState& aState);
 
- private:  // data members
-  static nsIURIFixup* sURIFixup;
+  // Called when the Private Browsing state of a nsDocShell changes.
+  void NotifyPrivateBrowsingChanged();
 
+ private:  // data members
 #ifdef DEBUG
-  // We're counting the number of |nsDocShells| to help find leaks
+           // We're counting the number of |nsDocShells| to help find leaks
   static unsigned long gNumberOfDocShells;
 #endif /* DEBUG */
 
   nsID mHistoryID;
   nsString mTitle;
   nsCString mOriginalUriString;
-  nsWeakPtr mOpener;
   nsTObserverArray<nsWeakPtr> mPrivacyObservers;
   nsTObserverArray<nsWeakPtr> mReflowObservers;
   nsTObserverArray<nsWeakPtr> mScrollObservers;
-  mozilla::OriginAttributes mOriginAttributes;
   mozilla::UniquePtr<mozilla::dom::ClientSource> mInitialClientSource;
   nsCOMPtr<nsINetworkInterceptController> mInterceptController;
   RefPtr<nsDOMNavigationTiming> mTiming;
@@ -1242,13 +1234,6 @@ class nsDocShell final : public nsDocLoader,
   // Are we a regular frame, a browser frame, or an app frame?
   FrameType mFrameType;
 
-  // This represents the state of private browsing in the docshell.
-  // Currently treated as a binary value: 1 - in private mode, 0 - not private
-  // mode On content docshells mPrivateBrowsingId ==
-  // mOriginAttributes.mPrivateBrowsingId On chrome docshells this value will be
-  // set, but not have the corresponding origin attribute set.
-  uint32_t mPrivateBrowsingId;
-
   // This represents the CSS display-mode we are currently using. This is mostly
   // used for media queries.
   DisplayMode mDisplayMode;
@@ -1308,13 +1293,9 @@ class nsDocShell final : public nsDocLoader,
   bool mDisableMetaRefreshWhenInactive : 1;
   bool mIsAppTab : 1;
   bool mUseGlobalHistory : 1;
-  bool mUseRemoteTabs : 1;
-  bool mUseRemoteSubframes : 1;
-  bool mUseTrackingProtection : 1;
   bool mDeviceSizeIsPageSize : 1;
   bool mWindowDraggingAllowed : 1;
   bool mInFrameSwap : 1;
-  bool mInheritPrivateBrowsingId : 1;
 
   // Because scriptability depends on the mAllowJavascript values of our
   // ancestors, we cache the effective scriptability and recompute it when

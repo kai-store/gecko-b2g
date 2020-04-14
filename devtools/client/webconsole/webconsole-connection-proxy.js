@@ -121,9 +121,6 @@ class WebConsoleConnectionProxy {
    * @returns Promise
    */
   _attachConsole() {
-    // Note that some types are being listened via the Resources API.
-    // All types that are still being listened from here would eventually be refactored
-    // in order to be fetched from the Resources API.
     const listeners = ["PageError", "NetworkActivity"];
     // Enable the forwarding of console messages to the parent process
     // when we open the Browser Console or Toolbox without fission support. If Fission
@@ -183,7 +180,6 @@ class WebConsoleConnectionProxy {
    *          went wront.
    */
   async _getCachedMessages() {
-    // Note that we only fetch PageError. ConsoleAPI is already fetched via the Resources API.
     const response = await this.webConsoleFront.getCachedMessages([
       "PageError",
     ]);

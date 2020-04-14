@@ -1884,18 +1884,18 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
         nsIGfxInfo::FEATURE_BLOCKED_DEVICE, DRIVER_LESS_THAN_OR_EQUAL,
         V(25, 20, 100, 6472), "FEATURE_FAILURE_BUG_1602511");
 
-    APPEND_TO_DRIVER_BLOCKLIST2(
-        OperatingSystem::Windows, DeviceFamily::AtiAll,
-        nsIGfxInfo::FEATURE_WEBRENDER_COMPOSITOR,
-        nsIGfxInfo::FEATURE_BLOCKED_DEVICE, DRIVER_EQUAL,
-        V(8, 17, 10, 1129), "FEATURE_FAILURE_CHROME_BUG_800950");
+    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::AtiAll,
+                                nsIGfxInfo::FEATURE_WEBRENDER_COMPOSITOR,
+                                nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+                                DRIVER_EQUAL, V(8, 17, 10, 1129),
+                                "FEATURE_FAILURE_CHROME_BUG_800950");
 
     // Block all AMD for now
-    APPEND_TO_DRIVER_BLOCKLIST2(
-        OperatingSystem::Windows, DeviceFamily::AtiAll,
-        nsIGfxInfo::FEATURE_WEBRENDER_COMPOSITOR,
-        nsIGfxInfo::FEATURE_BLOCKED_DEVICE, DRIVER_COMPARISON_IGNORED,
-        V(0, 0, 0, 0), "FEATURE_FAILURE_ALL_AMD");
+    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::AtiAll,
+                                nsIGfxInfo::FEATURE_WEBRENDER_COMPOSITOR,
+                                nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+                                DRIVER_COMPARISON_IGNORED, V(0, 0, 0, 0),
+                                "FEATURE_FAILURE_ALL_AMD");
 
     // Block all non-recent Win10
     APPEND_TO_DRIVER_BLOCKLIST2(

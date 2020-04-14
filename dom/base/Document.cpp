@@ -310,7 +310,6 @@
 #include "mozilla/dom/SVGDocument.h"
 #include "mozilla/dom/SVGSVGElement.h"
 #include "mozilla/dom/DocGroup.h"
-#include "mozilla/dom/TabGroup.h"
 #include "mozilla/dom/ChromeObserver.h"
 #ifdef MOZ_XUL
 #  include "mozilla/dom/XULBroadcastManager.h"
@@ -431,7 +430,7 @@ bool IdentifierMapEntry::HasNameElement() const {
 void IdentifierMapEntry::AddContentChangeCallback(
     Document::IDTargetObserver aCallback, void* aData, bool aForImage) {
   if (!mChangeCallbacks) {
-    mChangeCallbacks = new nsTHashtable<ChangeCallbackEntry>;
+    mChangeCallbacks = MakeUnique<nsTHashtable<ChangeCallbackEntry>>();
   }
 
   ChangeCallback cc = {aCallback, aData, aForImage};
@@ -2021,7 +2020,9 @@ Document::~Document() {
   }
 
   if (mDocGroup) {
-    mDocGroup->RemoveDocument(this);
+    MOZ_ASSERT(mDocGroup->GetBrowsingContextGroup());
+    mDocGroup->GetBrowsingContextGroup()->RemoveDocument(mDocGroup->GetKey(),
+                                                         this);
   }
 
   UnlinkOriginalDocumentIfStatic();
@@ -2435,7 +2436,8 @@ void Document::Reset(nsIChannel* aChannel, nsILoadGroup* aLoadGroup) {
   if (aChannel) {
     // Note: this code is duplicated in PrototypeDocumentContentSink::Init and
     // nsScriptSecurityManager::GetChannelResultPrincipals.
-    // Note: this should match nsDocShell::OnLoadingSite
+    // Note: this should match the uri used for the OnNewURI call in
+    //       nsDocShell::CreateContentViewer.
     NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
 
     nsIScriptSecurityManager* securityManager =
@@ -3325,6 +3327,14 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
     return NS_OK;
   }
 
+  // If this is an image, no need to set a CSP. Otherwise SVG images
+  // served with a CSP might block internally applied inline styles.
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
+  if (loadInfo->GetExternalContentPolicyType() ==
+      nsIContentPolicy::TYPE_IMAGE) {
+    return NS_OK;
+  }
+
   MOZ_ASSERT(!mCSP, "where did mCSP get set if not here?");
 
   // If there is a CSP that needs to be inherited from whatever
@@ -3333,7 +3343,6 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
   // document needs to inherit the CSP. See:
   // https://w3c.github.io/webappsec-csp/#initialize-document-csp
   if (CSP_ShouldResponseInheritCSP(aChannel)) {
-    nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
     mCSP = loadInfo->GetCspToInherit();
   }
 
@@ -3764,7 +3773,6 @@ void Document::AssertDocGroupMatchesKey() const {
     if (NS_SUCCEEDED(rv)) {
       MOZ_ASSERT(mDocGroup->MatchesKey(docGroupKey));
     }
-    // XXX: Check that the TabGroup is correct as well!
   }
 }
 #endif
@@ -5829,6 +5837,18 @@ already_AddRefed<nsIChannel> Document::CreateDummyChannelForCookies(
   }
   pbChannel->SetPrivate(loadContext->UsePrivateBrowsing());
 
+  // We need to set the hasStoragePermission for the dummy channel because we
+  // will use this channel to do a content blocking check. The channel URI
+  // is from the NodePrincipal of this document which is the inital document for
+  // the 'about:blank' content viewer. In this case, the NodePrincipal is the
+  // same as the parent document if the parent exists. So, we can copy the flag
+  // from the parent document directly.
+  bool parentDocHasStoragePermissin =
+      mParentDocument ? mParentDocument->HasStoragePermission() : false;
+
+  nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
+  Unused << loadInfo->SetHasStoragePermission(parentDocHasStoragePermissin);
+
   return channel.forget();
 }
 
@@ -6784,15 +6804,10 @@ DocGroup* Document::GetDocGroupOrCreate() {
   if (!mDocGroup) {
     nsAutoCString docGroupKey;
     nsresult rv = mozilla::dom::DocGroup::GetKey(NodePrincipal(), docGroupKey);
-    if (NS_SUCCEEDED(rv)) {
-      if (mDocumentContainer) {
-        nsPIDOMWindowOuter* window = mDocumentContainer->GetWindow();
-        if (window) {
-          TabGroup* tabgroup = window->MaybeTabGroup();
-          if (tabgroup) {
-            mDocGroup = tabgroup->AddDocument(docGroupKey, this);
-          }
-        }
+    if (NS_SUCCEEDED(rv) && mDocumentContainer) {
+      BrowsingContextGroup* group = GetBrowsingContext()->Group();
+      if (group) {
+        mDocGroup = group->AddDocument(docGroupKey, this);
       }
     }
   }
@@ -6805,29 +6820,30 @@ void Document::SetScopeObject(nsIGlobalObject* aGlobal) {
     mHasHadScriptHandlingObject = true;
 
     nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal);
-    if (window) {
-      // We want to get the tabgroup unconditionally, such that we can make
-      // certain that it is cached in the inner window early enough.
-      mozilla::dom::TabGroup* tabgroup = window->TabGroup();
-      // We should already have the principal, and now that we have been added
-      // to a window, we should be able to join a DocGroup!
-      nsAutoCString docGroupKey;
-      nsresult rv =
-          mozilla::dom::DocGroup::GetKey(NodePrincipal(), docGroupKey);
-      if (mDocGroup) {
-        if (NS_SUCCEEDED(rv)) {
-          MOZ_RELEASE_ASSERT(mDocGroup->MatchesKey(docGroupKey));
-        }
-        MOZ_RELEASE_ASSERT(mDocGroup->GetTabGroup() == tabgroup);
-      } else {
-        mDocGroup = tabgroup->AddDocument(docGroupKey, this);
-        MOZ_ASSERT(mDocGroup);
-      }
-
-      MOZ_ASSERT_IF(
-          mNodeInfoManager->GetArenaAllocator(),
-          mNodeInfoManager->GetArenaAllocator() == mDocGroup->ArenaAllocator());
+    if (!window) {
+      return;
     }
+    BrowsingContextGroup* browsingContextGroup = window->GetBrowsingContextGroup();
+
+    // We should already have the principal, and now that we have been added
+    // to a window, we should be able to join a DocGroup!
+    nsAutoCString docGroupKey;
+    nsresult rv = mozilla::dom::DocGroup::GetKey(NodePrincipal(), docGroupKey);
+    if (mDocGroup) {
+      if (NS_SUCCEEDED(rv)) {
+        MOZ_RELEASE_ASSERT(mDocGroup->MatchesKey(docGroupKey));
+      }
+      MOZ_RELEASE_ASSERT(mDocGroup->GetBrowsingContextGroup() ==
+                         browsingContextGroup);
+    } else {
+      mDocGroup = browsingContextGroup->AddDocument(docGroupKey, this);
+
+      MOZ_ASSERT(mDocGroup);
+    }
+
+    MOZ_ASSERT_IF(
+        mNodeInfoManager->GetArenaAllocator(),
+        mNodeInfoManager->GetArenaAllocator() == mDocGroup->ArenaAllocator());
   }
 }
 
@@ -11620,7 +11636,8 @@ class nsDelayedEventDispatcher : public Runnable {
   nsTArray<nsCOMPtr<Document>> mDocuments;
 };
 
-static void GetAndUnsuppressSubDocuments(Document& aDocument, nsTArray<nsCOMPtr<Document>>& aDocuments) {
+static void GetAndUnsuppressSubDocuments(
+    Document& aDocument, nsTArray<nsCOMPtr<Document>>& aDocuments) {
   if (aDocument.EventHandlingSuppressed() > 0) {
     aDocument.DecreaseEventSuppression();
     aDocument.ScriptLoader()->RemoveExecuteBlocker();
@@ -11941,7 +11958,7 @@ void Document::ScrollToRef() {
 
 void Document::RegisterActivityObserver(nsISupports* aSupports) {
   if (!mActivityObservers) {
-    mActivityObservers = new nsTHashtable<nsPtrHashKey<nsISupports>>();
+    mActivityObservers = MakeUnique<nsTHashtable<nsPtrHashKey<nsISupports>>>();
   }
   mActivityObservers->PutEntry(aSupports);
 }
@@ -12261,7 +12278,7 @@ void Document::GetPlugins(nsTArray<nsIObjectLoadingContent*>& aPlugins) {
   for (auto iter = mPlugins.ConstIter(); !iter.Done(); iter.Next()) {
     aPlugins.AppendElement(iter.Get()->GetKey());
   }
-  auto recurse = [&aPlugins] (Document& aSubDoc) {
+  auto recurse = [&aPlugins](Document& aSubDoc) {
     aSubDoc.GetPlugins(aPlugins);
     return CallState::Continue;
   };
@@ -14015,7 +14032,7 @@ void Document::RequestPointerLock(Element* aElement, CallerType aCallerType) {
     return;
   }
 
-  bool userInputOrSystemCaller = UserActivation::IsHandlingUserInput() ||
+  bool userInputOrSystemCaller = HasValidTransientUserGestureActivation() ||
                                  aCallerType == CallerType::System;
   nsCOMPtr<nsIRunnable> request =
       new PointerLockRequest(aElement, userInputOrSystemCaller);
@@ -14750,7 +14767,7 @@ DOMIntersectionObserver& Document::EnsureLazyLoadImageObserver() {
 
 void Document::NotifyLayerManagerRecreated() {
   EnumerateActivityObservers(NotifyActivityChanged);
-  EnumerateSubDocuments([] (Document& aSubDoc) {
+  EnumerateSubDocuments([](Document& aSubDoc) {
     aSubDoc.NotifyLayerManagerRecreated();
     return CallState::Continue;
   });
@@ -15055,7 +15072,7 @@ DocumentAutoplayPolicy Document::AutoplayPolicy() const {
 }
 
 void Document::MaybeAllowStorageForOpenerAfterUserInteraction() {
-  if (!CookieJarSettings()->GetRejectThirdPartyTrackers()) {
+  if (!CookieJarSettings()->GetRejectThirdPartyContexts()) {
     return;
   }
 
@@ -15067,9 +15084,17 @@ void Document::MaybeAllowStorageForOpenerAfterUserInteraction() {
     return;
   }
 
-  // We care about first-party tracking resources only.
-  if (!nsContentUtils::IsFirstPartyTrackingResourceWindow(inner)) {
-    return;
+  uint32_t cookieBehavior = CookieJarSettings()->GetCookieBehavior();
+  if (cookieBehavior == nsICookieService::BEHAVIOR_REJECT_TRACKER ||
+      cookieBehavior ==
+          nsICookieService::BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN) {
+    // We care about first-party tracking resources only.
+    if (!nsContentUtils::IsFirstPartyTrackingResourceWindow(inner)) {
+      return;
+    }
+  } else {
+    MOZ_ASSERT(net::CookieJarSettings::IsRejectThirdPartyWithExceptions(
+        cookieBehavior));
   }
 
   auto* outer = nsGlobalWindowOuter::Cast(inner->GetOuterWindow());
@@ -15173,8 +15198,7 @@ class UserIntractionTimer final : public Runnable,
         MakeScopeExit([self] { self->CancelTimerAndStoreUserInteraction(); });
 
     nsresult rv = NS_NewTimerWithCallback(
-        getter_AddRefs(mTimer), this, interval * 1000, nsITimer::TYPE_ONE_SHOT,
-        SystemGroup::EventTargetFor(TaskCategory::Other));
+        getter_AddRefs(mTimer), this, interval * 1000, nsITimer::TYPE_ONE_SHOT);
     NS_ENSURE_SUCCESS(rv, NS_OK);
 
     nsCOMPtr<nsIAsyncShutdownClient> phase = GetShutdownPhase();
@@ -15649,7 +15673,7 @@ already_AddRefed<mozilla::dom::Promise> Document::RequestStorageAccess(
   }
 
   // Only enforce third-party checks when there is a reason to enforce them.
-  if (!CookieJarSettings()->GetRejectThirdPartyTrackers()) {
+  if (!CookieJarSettings()->GetRejectThirdPartyContexts()) {
     // Step 3. If the document's frame is the main frame, resolve.
     if (IsTopLevelContentDocument()) {
       promise->MaybeResolveWithUndefined();
@@ -15709,7 +15733,7 @@ already_AddRefed<mozilla::dom::Promise> Document::RequestStorageAccess(
   //         user settings, anti-clickjacking heuristics, or prompting the
   //         user for explicit permission. Reject if some rule is not fulfilled.
 
-  if (CookieJarSettings()->GetRejectThirdPartyTrackers()) {
+  if (CookieJarSettings()->GetRejectThirdPartyContexts()) {
     // Only do something special for third-party tracking content.
     if (StorageDisabledByAntiTracking(this, nullptr)) {
       // Note: If this has returned true, the top-level document is guaranteed

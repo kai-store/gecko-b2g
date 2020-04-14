@@ -388,6 +388,10 @@ var dataProviders = {
       }
     } catch (e) {}
 
+    if (Services.io.socketProcessLaunched) {
+      remoteTypes.socket = 1;
+    }
+
     let data = {
       remoteTypes,
       maxWebContentProcesses: Services.appinfo.maxWebProcessCount,
@@ -712,6 +716,18 @@ var dataProviders = {
     data.handlerUsed = Services.appinfo.accessibleHandlerUsed;
     data.instantiator = Services.appinfo.accessibilityInstantiator;
     done(data);
+  },
+
+  startupCache: function startupCache(done) {
+    const startupInfo = Cc["@mozilla.org/startupcacheinfo;1"].getService(
+      Ci.nsIStartupCacheInfo
+    );
+    done({
+      DiskCachePath: startupInfo.DiskCachePath,
+      IgnoreDiskCache: startupInfo.IgnoreDiskCache,
+      FoundDiskCacheOnInit: startupInfo.FoundDiskCacheOnInit,
+      WroteToDiskCache: startupInfo.WroteToDiskCache,
+    });
   },
 
   libraryVersions: function libraryVersions(done) {

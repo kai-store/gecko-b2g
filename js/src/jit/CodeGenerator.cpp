@@ -14,9 +14,11 @@
 #include "mozilla/EnumeratedRange.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/Tuple.h"
 #include "mozilla/Unused.h"
 
 #include <type_traits>
+#include <utility>
 
 #include "jslibmath.h"
 #include "jsmath.h"
@@ -29,7 +31,9 @@
 #include "builtin/String.h"
 #include "builtin/TypedObject.h"
 #include "gc/Nursery.h"
-#include "irregexp/NativeRegExpMacroAssembler.h"
+#ifndef ENABLE_NEW_REGEXP
+#  include "irregexp/NativeRegExpMacroAssembler.h"
+#endif
 #include "jit/AtomicOperations.h"
 #include "jit/BaselineCodeGen.h"
 #include "jit/IonIC.h"
@@ -385,41 +389,27 @@ void CodeGenerator::callVM(LInstruction* ins, const Register* dynStack) {
 //   ArgList(ToRegister(lir->lhs()), ToRegister(lir->rhs()))
 
 template <typename... ArgTypes>
-class ArgSeq;
+class ArgSeq {
+  mozilla::Tuple<std::remove_reference_t<ArgTypes>...> args_;
 
-template <>
-class ArgSeq<> {
- public:
-  ArgSeq() = default;
-
-  inline void generate(CodeGenerator* codegen) const {}
-
-#ifdef DEBUG
-  static constexpr size_t numArgs = 0;
-#endif
-};
-
-template <typename HeadType, typename... TailTypes>
-class ArgSeq<HeadType, TailTypes...> : public ArgSeq<TailTypes...> {
- private:
-  using RawHeadType = std::remove_reference_t<HeadType>;
-  RawHeadType head_;
+  template <std::size_t... ISeq>
+  inline void generate(CodeGenerator* codegen,
+                       std::index_sequence<ISeq...>) const {
+    // Arguments are pushed in reverse order, from last argument to first
+    // argument.
+    (codegen->pushArg(mozilla::Get<sizeof...(ISeq) - 1 - ISeq>(args_)), ...);
+  }
 
  public:
-  template <typename ProvidedHead, typename... ProvidedTail>
-  explicit ArgSeq(ProvidedHead&& head, ProvidedTail&&... tail)
-      : ArgSeq<TailTypes...>(std::forward<ProvidedTail>(tail)...),
-        head_(std::forward<ProvidedHead>(head)) {}
+  explicit ArgSeq(ArgTypes&&... args)
+      : args_(std::forward<ArgTypes>(args)...) {}
 
-  // Arguments are pushed in reverse order, from last argument to first
-  // argument.
   inline void generate(CodeGenerator* codegen) const {
-    this->ArgSeq<TailTypes...>::generate(codegen);
-    codegen->pushArg(head_);
+    generate(codegen, std::index_sequence_for<ArgTypes...>{});
   }
 
 #ifdef DEBUG
-  static constexpr size_t numArgs = sizeof...(TailTypes) + 1;
+  static constexpr size_t numArgs = sizeof...(ArgTypes);
 #endif
 };
 
@@ -1910,32 +1900,57 @@ void CodeGenerator::visitRegExp(LRegExp* lir) {
   masm.bind(ool->rejoin());
 }
 
+#ifdef ENABLE_NEW_REGEXP
+static const size_t InputOutputDataSize = 0;
+#else
+static const size_t InputOutputDataSize = sizeof(irregexp::InputOutputData);
+#endif
+
 // Amount of space to reserve on the stack when executing RegExps inline.
 static const size_t RegExpReservedStack =
-    sizeof(irregexp::InputOutputData) + sizeof(MatchPairs) +
+    InputOutputDataSize + sizeof(MatchPairs) +
     RegExpObject::MaxPairCount * sizeof(MatchPair);
 
 static size_t RegExpPairsVectorStartOffset(size_t inputOutputDataStartOffset) {
-  return inputOutputDataStartOffset + sizeof(irregexp::InputOutputData) +
-         sizeof(MatchPairs);
+  return inputOutputDataStartOffset + InputOutputDataSize + sizeof(MatchPairs);
 }
 
 static Address RegExpPairCountAddress(MacroAssembler& masm,
                                       size_t inputOutputDataStartOffset) {
   return Address(masm.getStackPointer(), inputOutputDataStartOffset +
-                                             sizeof(irregexp::InputOutputData) +
+                                             InputOutputDataSize +
                                              MatchPairs::offsetOfPairCount());
 }
+
+#ifdef ENABLE_NEW_REGEXP
 
 // Prepare an InputOutputData and optional MatchPairs which space has been
 // allocated for on the stack, and try to execute a RegExp on a string input.
 // If the RegExp was successfully executed and matched the input, fallthrough,
 // otherwise jump to notFound or failure.
-static bool PrepareAndExecuteRegExp(
-    JSContext* cx, MacroAssembler& masm, Register regexp, Register input,
-    Register lastIndex, Register temp1, Register temp2, Register temp3,
-    size_t inputOutputDataStartOffset, RegExpShared::CompilationMode mode,
-    bool stringsCanBeInNursery, Label* notFound, Label* failure) {
+static bool PrepareAndExecuteRegExp(JSContext* cx, MacroAssembler& masm,
+                                    Register regexp, Register input,
+                                    Register lastIndex, Register temp1,
+                                    Register temp2, Register temp3,
+                                    size_t inputOutputDataStartOffset,
+                                    bool stringsCanBeInNursery, Label* notFound,
+                                    Label* failure) {
+  MOZ_CRASH("TODO");
+}
+
+#else
+
+// Prepare an InputOutputData and optional MatchPairs which space has been
+// allocated for on the stack, and try to execute a RegExp on a string input.
+// If the RegExp was successfully executed and matched the input, fallthrough,
+// otherwise jump to notFound or failure.
+static bool PrepareAndExecuteRegExp(JSContext* cx, MacroAssembler& masm,
+                                    Register regexp, Register input,
+                                    Register lastIndex, Register temp1,
+                                    Register temp2, Register temp3,
+                                    size_t inputOutputDataStartOffset,
+                                    bool stringsCanBeInNursery, Label* notFound,
+                                    Label* failure) {
   JitSpew(JitSpew_Codegen, "# Emitting PrepareAndExecuteRegExp");
 
   // clang-format off
@@ -2009,32 +2024,26 @@ static bool PrepareAndExecuteRegExp(
   if (!res) {
     return false;
   }
-#ifdef JS_USE_LINK_REGISTER
-  if (mode != RegExpShared::MatchOnly) {
-    masm.pushReturnAddress();
-  }
-#endif
-  if (mode == RegExpShared::Normal) {
-    // First, fill in a skeletal MatchPairs instance on the stack. This will be
-    // passed to the OOL stub in the caller if we aren't able to execute the
-    // RegExp inline, and that stub needs to be able to determine whether the
-    // execution finished successfully.
 
-    // Initialize MatchPairs::pairCount to 1, the correct value can only
-    // be determined after loading the RegExpShared.
-    masm.store32(Imm32(1), pairCountAddress);
+  // First, fill in a skeletal MatchPairs instance on the stack. This will be
+  // passed to the OOL stub in the caller if we aren't able to execute the
+  // RegExp inline, and that stub needs to be able to determine whether the
+  // execution finished successfully.
 
-    // Initialize MatchPairs::pairs[0]::start to MatchPair::NoMatch.
-    Address firstMatchPairStartAddress(
-        masm.getStackPointer(),
-        pairsVectorStartOffset + offsetof(MatchPair, start));
-    masm.store32(Imm32(MatchPair::NoMatch), firstMatchPairStartAddress);
+  // Initialize MatchPairs::pairCount to 1, the correct value can only
+  // be determined after loading the RegExpShared.
+  masm.store32(Imm32(1), pairCountAddress);
 
-    // Assign the MatchPairs::pairs pointer to the first MatchPair object.
-    Address pairsVectorAddress(masm.getStackPointer(), pairsVectorStartOffset);
-    masm.computeEffectiveAddress(pairsVectorAddress, temp1);
-    masm.storePtr(temp1, pairsPointerAddress);
-  }
+  // Initialize MatchPairs::pairs[0]::start to MatchPair::NoMatch.
+  Address firstMatchPairStartAddress(
+      masm.getStackPointer(),
+      pairsVectorStartOffset + offsetof(MatchPair, start));
+  masm.store32(Imm32(MatchPair::NoMatch), firstMatchPairStartAddress);
+
+  // Assign the MatchPairs::pairs pointer to the first MatchPair object.
+  Address pairsVectorAddress(masm.getStackPointer(), pairsVectorStartOffset);
+  masm.computeEffectiveAddress(pairsVectorAddress, temp1);
+  masm.storePtr(temp1, pairsPointerAddress);
 
   // Check for a linear input string.
   masm.branchIfRope(input, failure);
@@ -2104,16 +2113,14 @@ static bool PrepareAndExecuteRegExp(
     masm.bind(&done);
   }
 
-  if (mode == RegExpShared::Normal) {
-    // Don't handle RegExps with excessive parens.
-    masm.load32(Address(temp1, RegExpShared::offsetOfParenCount()), temp2);
-    masm.branch32(Assembler::AboveOrEqual, temp2,
-                  Imm32(RegExpObject::MaxPairCount), failure);
+  // Don't handle RegExps with excessive parens.
+  masm.load32(Address(temp1, RegExpShared::offsetOfParenCount()), temp2);
+  masm.branch32(Assembler::AboveOrEqual, temp2,
+                Imm32(RegExpObject::MaxPairCount), failure);
 
-    // Fill in the paren count in the MatchPairs on the stack.
-    masm.add32(Imm32(1), temp2);
-    masm.store32(temp2, pairCountAddress);
-  }
+  // Fill in the paren count in the MatchPairs on the stack.
+  masm.add32(Imm32(1), temp2);
+  masm.store32(temp2, pairCountAddress);
 
   // Load the code pointer for the type of input string we have, and compute
   // the input start/end pointers in the InputOutputData.
@@ -2127,16 +2134,18 @@ static bool PrepareAndExecuteRegExp(
       masm.loadStringChars(input, temp2, CharEncoding::TwoByte);
       masm.storePtr(temp2, inputStartAddress);
       masm.lshiftPtr(Imm32(1), temp3);
-      masm.loadPtr(Address(temp1, RegExpShared::offsetOfTwoByteJitCode(mode)),
-                   codePointer);
+      masm.loadPtr(
+          Address(temp1, RegExpShared::offsetOfJitCode(/*latin1 =*/false)),
+          codePointer);
       masm.jump(&done);
     }
     masm.bind(&isLatin1);
     {
       masm.loadStringChars(input, temp2, CharEncoding::Latin1);
       masm.storePtr(temp2, inputStartAddress);
-      masm.loadPtr(Address(temp1, RegExpShared::offsetOfLatin1JitCode(mode)),
-                   codePointer);
+      masm.loadPtr(
+          Address(temp1, RegExpShared::offsetOfJitCode(/*latin1 = */ true)),
+          codePointer);
     }
     masm.bind(&done);
 
@@ -2149,15 +2158,10 @@ static bool PrepareAndExecuteRegExp(
   masm.loadPtr(Address(codePointer, JitCode::offsetOfCode()), codePointer);
 
   // Finish filling in the InputOutputData instance on the stack.
-  if (mode == RegExpShared::Normal) {
-    masm.computeEffectiveAddress(
-        Address(masm.getStackPointer(), matchPairsStartOffset), temp2);
-    masm.storePtr(temp2, matchesPointerAddress);
-  } else {
-    // Use InputOutputData.endIndex itself for output.
-    masm.computeEffectiveAddress(endIndexAddress, temp2);
-    masm.storePtr(temp2, endIndexAddress);
-  }
+  masm.computeEffectiveAddress(
+      Address(masm.getStackPointer(), matchPairsStartOffset), temp2);
+  masm.storePtr(temp2, matchesPointerAddress);
+
   masm.storePtr(lastIndex, startIndexAddress);
   masm.store32(Imm32(RegExpRunStatus_Error), matchResultAddress);
 
@@ -2173,14 +2177,14 @@ static bool PrepareAndExecuteRegExp(
     volatileRegs.add(regexp);
   }
 
-#ifdef JS_TRACE_LOGGING
+#  ifdef JS_TRACE_LOGGING
   if (TraceLogTextIdEnabled(TraceLogger_IrregexpExecute)) {
     masm.push(temp1);
     masm.loadTraceLogger(temp1);
     masm.tracelogStartId(temp1, TraceLogger_IrregexpExecute);
     masm.pop(temp1);
   }
-#endif
+#  endif
 
   // Execute the RegExp.
   masm.computeEffectiveAddress(
@@ -2191,12 +2195,12 @@ static bool PrepareAndExecuteRegExp(
   masm.callWithABI(codePointer);
   masm.PopRegsInMask(volatileRegs);
 
-#ifdef JS_TRACE_LOGGING
+#  ifdef JS_TRACE_LOGGING
   if (TraceLogTextIdEnabled(TraceLogger_IrregexpExecute)) {
     masm.loadTraceLogger(temp1);
     masm.tracelogStopId(temp1, TraceLogger_IrregexpExecute);
   }
-#endif
+#  endif
 
   Label success;
   masm.branch32(Assembler::Equal, matchResultAddress,
@@ -2250,13 +2254,10 @@ static bool PrepareAndExecuteRegExp(
   masm.load32(Address(temp2, RegExpShared::offsetOfFlags()), temp3);
   masm.store32(temp3, Address(temp1, RegExpStatics::offsetOfLazyFlags()));
 
-  if (mode == RegExpShared::MatchOnly) {
-    // endIndex is passed via temp3.
-    masm.load32(endIndexAddress, temp3);
-  }
-
   return true;
 }
+
+#endif  // !ENABLE_NEW_REGEXP
 
 static void CopyStringChars(MacroAssembler& masm, Register to, Register from,
                             Register len, Register byteOpScratch,
@@ -2602,14 +2603,17 @@ JitCode* JitRealm::generateRegExpMatcherStub(JSContext* cx) {
 
   StackMacroAssembler masm(cx);
 
+#ifdef JS_USE_LINK_REGISTER
+  masm.pushReturnAddress();
+#endif
+
   // The InputOutputData is placed above the return address on the stack.
   size_t inputOutputDataStartOffset = sizeof(void*);
 
   Label notFound, oolEntry;
   if (!PrepareAndExecuteRegExp(cx, masm, regexp, input, lastIndex, temp1, temp2,
                                temp3, inputOutputDataStartOffset,
-                               RegExpShared::Normal, stringsCanBeInNursery,
-                               &notFound, &oolEntry)) {
+                               stringsCanBeInNursery, &notFound, &oolEntry)) {
     return nullptr;
   }
 
@@ -2841,7 +2845,7 @@ void CodeGenerator::visitOutOfLineRegExpMatcher(OutOfLineRegExpMatcher* ool) {
   Register temp = regs.takeAny();
 
   masm.computeEffectiveAddress(
-      Address(masm.getStackPointer(), sizeof(irregexp::InputOutputData)), temp);
+      Address(masm.getStackPointer(), InputOutputDataSize), temp);
 
   pushArg(temp);
   pushArg(lastIndex);
@@ -2916,14 +2920,17 @@ JitCode* JitRealm::generateRegExpSearcherStub(JSContext* cx) {
 
   StackMacroAssembler masm(cx);
 
+#ifdef JS_USE_LINK_REGISTER
+  masm.pushReturnAddress();
+#endif
+
   // The InputOutputData is placed above the return address on the stack.
   size_t inputOutputDataStartOffset = sizeof(void*);
 
   Label notFound, oolEntry;
   if (!PrepareAndExecuteRegExp(cx, masm, regexp, input, lastIndex, temp1, temp2,
                                temp3, inputOutputDataStartOffset,
-                               RegExpShared::Normal, stringsCanBeInNursery,
-                               &notFound, &oolEntry)) {
+                               stringsCanBeInNursery, &notFound, &oolEntry)) {
     return nullptr;
   }
 
@@ -3022,7 +3029,7 @@ void CodeGenerator::visitOutOfLineRegExpSearcher(OutOfLineRegExpSearcher* ool) {
   Register temp = regs.takeAny();
 
   masm.computeEffectiveAddress(
-      Address(masm.getStackPointer(), sizeof(irregexp::InputOutputData)), temp);
+      Address(masm.getStackPointer(), InputOutputDataSize), temp);
 
   pushArg(temp);
   pushArg(lastIndex);
@@ -3092,19 +3099,29 @@ JitCode* JitRealm::generateRegExpTesterStub(JSContext* cx) {
   Register temp2 = regs.takeAny();
   Register temp3 = regs.takeAny();
 
-  masm.reserveStack(sizeof(irregexp::InputOutputData));
+  masm.reserveStack(RegExpReservedStack);
 
   Label notFound, oolEntry;
   if (!PrepareAndExecuteRegExp(cx, masm, regexp, input, lastIndex, temp1, temp2,
-                               temp3, 0, RegExpShared::MatchOnly,
-                               stringsCanBeInNursery, &notFound, &oolEntry)) {
+                               temp3, 0, stringsCanBeInNursery, &notFound,
+                               &oolEntry)) {
     return nullptr;
   }
 
   Label done;
 
-  // temp3 contains endIndex.
-  masm.move32(temp3, result);
+  // In visitRegExpMatcher and visitRegExpSearcher, we reserve stack space
+  // before calling the stub. For RegExpTester we call the stub before reserving
+  // stack space, so the offset of the InputOutputData is 0.
+  size_t inputOutputDataStartOffset = 0;
+
+  size_t pairsVectorStartOffset =
+      RegExpPairsVectorStartOffset(inputOutputDataStartOffset);
+  Address matchPairLimit(masm.getStackPointer(),
+                         pairsVectorStartOffset + offsetof(MatchPair, limit));
+
+  // RegExpTester returns the end index of the match to update lastIndex.
+  masm.load32(matchPairLimit, result);
   masm.jump(&done);
 
   masm.bind(&notFound);
@@ -3115,7 +3132,7 @@ JitCode* JitRealm::generateRegExpTesterStub(JSContext* cx) {
   masm.move32(Imm32(RegExpTesterResultFailed), result);
 
   masm.bind(&done);
-  masm.freeStack(sizeof(irregexp::InputOutputData));
+  masm.freeStack(RegExpReservedStack);
   masm.ret();
 
   Linker linker(masm);
@@ -4393,19 +4410,6 @@ void CodeGenerator::visitToNumeric(LToNumeric* lir) {
     masm.moveValue(operand, output);
   }
 
-  masm.bind(ool->rejoin());
-}
-
-void CodeGenerator::visitToNumber(LToNumber* lir) {
-  ValueOperand operand = ToValue(lir, LToNumber::Input);
-  ValueOperand output = ToOutValue(lir);
-
-  using Fn = bool (*)(JSContext*, HandleValue, MutableHandleValue);
-  OutOfLineCode* ool =
-      oolCallVM<Fn, DoToNumber>(lir, ArgList(operand), StoreValueTo(output));
-
-  masm.branchTestNumber(Assembler::NotEqual, operand, ool->entry());
-  masm.moveValue(operand, output);
   masm.bind(ool->rejoin());
 }
 
@@ -7985,15 +7989,6 @@ void CodeGenerator::visitPowD(LPowD* ins) {
   MOZ_ASSERT(ToFloatRegister(ins->output()) == ReturnDoubleReg);
 }
 
-void CodeGenerator::visitPowV(LPowV* ins) {
-  pushArg(ToValue(ins, LPowV::PowerInput));
-  pushArg(ToValue(ins, LPowV::ValueInput));
-
-  using Fn = bool (*)(JSContext*, MutableHandleValue, MutableHandleValue,
-                      MutableHandleValue);
-  callVM<Fn, js::PowValues>(ins);
-}
-
 void CodeGenerator::visitSignI(LSignI* ins) {
   Register input = ToRegister(ins->input());
   Register output = ToRegister(ins->output());
@@ -8205,62 +8200,6 @@ void CodeGenerator::visitModD(LModD* ins) {
   }
 }
 
-void CodeGenerator::visitBinaryV(LBinaryV* lir) {
-  pushArg(ToValue(lir, LBinaryV::RhsInput));
-  pushArg(ToValue(lir, LBinaryV::LhsInput));
-
-  using Fn = bool (*)(JSContext*, MutableHandleValue, MutableHandleValue,
-                      MutableHandleValue);
-  switch (lir->jsop()) {
-    case JSOp::Add:
-      callVM<Fn, js::AddValues>(lir);
-      break;
-
-    case JSOp::Sub:
-      callVM<Fn, js::SubValues>(lir);
-      break;
-
-    case JSOp::Mul:
-      callVM<Fn, js::MulValues>(lir);
-      break;
-
-    case JSOp::Div:
-      callVM<Fn, js::DivValues>(lir);
-      break;
-
-    case JSOp::Mod:
-      callVM<Fn, js::ModValues>(lir);
-      break;
-
-    case JSOp::BitAnd:
-      callVM<Fn, js::BitAnd>(lir);
-      break;
-
-    case JSOp::BitOr:
-      callVM<Fn, js::BitOr>(lir);
-      break;
-
-    case JSOp::BitXor:
-      callVM<Fn, js::BitXor>(lir);
-      break;
-
-    case JSOp::Lsh:
-      callVM<Fn, js::BitLsh>(lir);
-      break;
-
-    case JSOp::Rsh:
-      callVM<Fn, js::BitRsh>(lir);
-      break;
-
-    case JSOp::Ursh:
-      callVM<Fn, js::UrshValues>(lir);
-      break;
-
-    default:
-      MOZ_CRASH("Unexpected binary op");
-  }
-}
-
 void CodeGenerator::emitCompareS(LInstruction* lir, JSOp op, Register left,
                                  Register right, Register output) {
   MOZ_ASSERT(lir->isCompareS() || lir->isCompareStrictS());
@@ -8336,8 +8275,8 @@ void CodeGenerator::visitCompareS(LCompareS* lir) {
 }
 
 void CodeGenerator::visitCompareVM(LCompareVM* lir) {
-  pushArg(ToValue(lir, LBinaryV::RhsInput));
-  pushArg(ToValue(lir, LBinaryV::LhsInput));
+  pushArg(ToValue(lir, LCompareVM::RhsInput));
+  pushArg(ToValue(lir, LCompareVM::LhsInput));
 
   using Fn =
       bool (*)(JSContext*, MutableHandleValue, MutableHandleValue, bool*);
@@ -8359,19 +8298,19 @@ void CodeGenerator::visitCompareVM(LCompareVM* lir) {
       break;
 
     case JSOp::Lt:
-      callVM<Fn, jit::LessThan>(lir);
+      callVM<Fn, js::LessThan>(lir);
       break;
 
     case JSOp::Le:
-      callVM<Fn, jit::LessThanOrEqual>(lir);
+      callVM<Fn, js::LessThanOrEqual>(lir);
       break;
 
     case JSOp::Gt:
-      callVM<Fn, jit::GreaterThan>(lir);
+      callVM<Fn, js::GreaterThan>(lir);
       break;
 
     case JSOp::Ge:
-      callVM<Fn, jit::GreaterThanOrEqual>(lir);
+      callVM<Fn, js::GreaterThanOrEqual>(lir);
       break;
 
     default:
@@ -10506,9 +10445,11 @@ bool CodeGenerator::generateWasm(wasm::FuncTypeIdDesc funcTypeId,
             &functionEntryStackMap)) {
       return false;
     }
+
     // In debug builds, we'll always have a stack map, even if there are no
     // refs to track.
-    MOZ_ALWAYS_TRUE(functionEntryStackMap);
+    MOZ_ASSERT(functionEntryStackMap);
+
     if (functionEntryStackMap &&
         !stackMaps->add((uint8_t*)(uintptr_t)trapInsnOffset.offset(),
                         functionEntryStackMap)) {
@@ -10562,11 +10503,13 @@ bool CodeGenerator::generateWasm(wasm::FuncTypeIdDesc funcTypeId,
                                       nInboundStackArgBytes, &stackMap)) {
       return false;
     }
+
     // In debug builds, we'll always have a stack map.
-    MOZ_ALWAYS_TRUE(stackMap);
+    MOZ_ASSERT(stackMap);
     if (!stackMap) {
       continue;
     }
+
     if (!stackMaps->add((uint8_t*)(uintptr_t)index.displacement(), stackMap)) {
       stackMap->destroy();
       return false;
@@ -11385,13 +11328,6 @@ void CodeGenerator::visitThrow(LThrow* lir) {
 
   using Fn = bool (*)(JSContext*, HandleValue);
   callVM<Fn, js::ThrowOperation>(lir);
-}
-
-void CodeGenerator::visitBitNotV(LBitNotV* lir) {
-  pushArg(ToValue(lir, LBitNotV::Input));
-
-  using Fn = bool (*)(JSContext*, MutableHandleValue, MutableHandleValue);
-  callVM<Fn, BitNot>(lir);
 }
 
 class OutOfLineTypeOfV : public OutOfLineCodeBase<CodeGenerator> {

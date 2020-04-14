@@ -30,6 +30,7 @@
 // symbolize one of the two traces and this can cause suppressed races to
 // show up intermittently.
 //
+// clang-format off
 extern "C" const char* __tsan_default_suppressions() {
   return "# Add your suppressions below\n"
 
@@ -121,8 +122,8 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:nsThread::SizeOfEventQueues\n"
 
          // Bug 1600895
-         "race:js::gc::MovingTracer::onBaseShapeEdge\n"
-         "race:js::gc::MovingTracer::onScopeEdge\n"
+         "race:UpdateCellPointers<js::Shape>\n"
+         "race:UpdateCellPointers<js::Scope>\n"
          "race:js::gc::MovingTracer::onShapeEdge\n"
          "race:fixupShapeTreeAfterMovingGC\n"
 
@@ -252,8 +253,8 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:GCHeapThreshold::updateAfterGC\n"
 
          // Bug 1614646
-         "race:nsCookieService::CountCookiesFromHostInternal\n"
-         "race:nsCookieService::InitDBStates\n"
+         "race:CookieService::CountCookiesFromHostInternal\n"
+         "race:CookieService::InitDBStates\n"
 
          // Bug 1614706
          "race:CacheFileInputStream::Release\n"
@@ -315,4 +316,5 @@ extern "C" const char* __tsan_default_suppressions() {
       // End of suppressions.
       ;  // Please keep this semicolon.
 }
+// clang-format on
 #endif  // _MSC_VER

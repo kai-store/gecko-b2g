@@ -52,10 +52,10 @@ class IonCacheIRCompiler;
   _(GuardSpecificInt32Immediate)          \
   _(GuardMagicValue)                      \
   _(GuardNoDenseElements)                 \
+  _(GuardAndGetInt32FromString)           \
   _(GuardAndGetNumberFromString)          \
   _(GuardAndGetNumberFromBoolean)         \
   _(GuardAndGetIndexFromString)           \
-  _(GuardAndGetInt32FromNumber)           \
   _(GuardIndexIsNonNegative)              \
   _(GuardIndexGreaterThanArrayLength)     \
   _(GuardIndexIsValidUpdateOrAdd)         \
@@ -81,11 +81,13 @@ class IonCacheIRCompiler;
   _(DoubleMulResult)                      \
   _(DoubleDivResult)                      \
   _(DoubleModResult)                      \
+  _(DoublePowResult)                      \
   _(Int32AddResult)                       \
   _(Int32SubResult)                       \
   _(Int32MulResult)                       \
   _(Int32DivResult)                       \
   _(Int32ModResult)                       \
+  _(Int32PowResult)                       \
   _(Int32BitOrResult)                     \
   _(Int32BitXorResult)                    \
   _(Int32BitAndResult)                    \
@@ -129,6 +131,8 @@ class IonCacheIRCompiler;
   _(LoadTypedElementExistsResult)         \
   _(LoadTypedElementResult)               \
   _(LoadObjectResult)                     \
+  _(LoadInt32Result)                      \
+  _(LoadDoubleResult)                     \
   _(LoadTypeOfObjectResult)               \
   _(LoadInt32TruthyResult)                \
   _(LoadDoubleTruthyResult)               \

@@ -235,10 +235,10 @@ class MainThreadConsoleData final {
 
  private:
   ~MainThreadConsoleData() {
-    NS_ReleaseOnMainThreadSystemGroup("MainThreadConsoleData::mStorage",
-                                      mStorage.forget());
-    NS_ReleaseOnMainThreadSystemGroup("MainThreadConsoleData::mSandbox",
-                                      mSandbox.forget());
+    NS_ReleaseOnMainThread("MainThreadConsoleData::mStorage",
+                           mStorage.forget());
+    NS_ReleaseOnMainThread("MainThreadConsoleData::mSandbox",
+                           mSandbox.forget());
   }
 
   // All members, except for mRefCnt, are accessed only on the main thread,
@@ -2589,14 +2589,13 @@ already_AddRefed<Console> Console::GetConsoleInternal(
   }
 
   // Debugger worker scope
-  else {
-    WorkerDebuggerGlobalScope* debuggerScope =
-        workerPrivate->DebuggerGlobalScope();
-    MOZ_ASSERT(debuggerScope);
-    MOZ_ASSERT(debuggerScope == global, "Which kind of global do we have?");
 
-    return debuggerScope->GetConsole(aRv);
-  }
+  WorkerDebuggerGlobalScope* debuggerScope =
+      workerPrivate->DebuggerGlobalScope();
+  MOZ_ASSERT(debuggerScope);
+  MOZ_ASSERT(debuggerScope == global, "Which kind of global do we have?");
+
+  return debuggerScope->GetConsole(aRv);
 }
 
 bool Console::MonotonicTimer(JSContext* aCx, MethodName aMethodName,

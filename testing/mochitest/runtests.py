@@ -1702,7 +1702,11 @@ toolbar#nav-bar {
             self.log.error(str(e))
             return None
 
-        browserEnv["XPCOM_MEM_BLOAT_LOG"] = self.leak_report_file
+        if ("MOZ_PROFILER_STARTUP_FEATURES" not in browserEnv or
+            "nativeallocations" not in browserEnv["MOZ_PROFILER_STARTUP_FEATURES"].split(",")):
+            # Only turn on the bloat log if the profiler's native allocation feature is
+            # not enabled. The two are not compatible.
+            browserEnv["XPCOM_MEM_BLOAT_LOG"] = self.leak_report_file
 
         try:
             gmp_path = self.getGMPPluginPath(options)
@@ -3079,10 +3083,12 @@ toolbar#nav-bar {
             return message
 
         def countline(self, message):
-            if message['action'] != 'log':
+            if message['action'] == 'log':
+                line = message['message']
+            elif message['action'] == 'process_output':
+                line = message['data']
+            else:
                 return message
-
-            line = message['message']
             val = 0
             try:
                 val = int(line.split(':')[-1].strip())

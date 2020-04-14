@@ -247,8 +247,6 @@ void CanonicalBrowsingContext::UpdateMediaControlKeysEvent(
 void CanonicalBrowsingContext::LoadURI(const nsAString& aURI,
                                        const LoadURIOptions& aOptions,
                                        ErrorResult& aError) {
-  nsCOMPtr<nsIURIFixup> uriFixup = components::URIFixup::Service();
-
   nsCOMPtr<nsISupports> consumer = GetDocShell();
   if (!consumer) {
     consumer = GetEmbedderElement();
@@ -260,7 +258,7 @@ void CanonicalBrowsingContext::LoadURI(const nsAString& aURI,
 
   RefPtr<nsDocShellLoadState> loadState;
   nsresult rv = nsDocShellLoadState::CreateFromLoadURIOptions(
-      consumer, uriFixup, aURI, aOptions, getter_AddRefs(loadState));
+      consumer, aURI, aOptions, getter_AddRefs(loadState));
 
   if (rv == NS_ERROR_MALFORMED_URI) {
     DisplayLoadError(aURI);
@@ -272,9 +270,7 @@ void CanonicalBrowsingContext::LoadURI(const nsAString& aURI,
     return;
   }
 
-  // NOTE: It's safe to call `LoadURI` without an accessor from the parent
-  // process. The load will be performed with ambient "chrome" authority.
-  LoadURI(nullptr, loadState, true);
+  LoadURI(loadState, true);
 }
 
 void CanonicalBrowsingContext::PendingRemotenessChange::Complete(

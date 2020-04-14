@@ -31,7 +31,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/dom/TabGroup.h"
 #include "nsIWebNavigation.h"
 #include "nsDocShellLoadTypes.h"
 #include "base/process.h"
@@ -1029,7 +1028,7 @@ nsSHistory::EvictAllContentViewers() {
 
 static void LoadURIs(nsTArray<nsSHistory::LoadEntryResult>& aLoadResults) {
   for (nsSHistory::LoadEntryResult& loadEntry : aLoadResults) {
-    loadEntry.mBrowsingContext->LoadURI(nullptr, loadEntry.mLoadState, false);
+    loadEntry.mBrowsingContext->LoadURI(loadEntry.mLoadState, false);
   }
 }
 

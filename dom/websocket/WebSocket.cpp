@@ -28,7 +28,6 @@
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/dom/WorkerScope.h"
 #include "mozilla/StaticPrefs_dom.h"
-#include "nsAutoPtr.h"
 #include "mozilla/LoadInfo.h"
 #include "nsGlobalWindow.h"
 #include "nsIScriptGlobalObject.h"
@@ -580,10 +579,8 @@ void WebSocketImpl::Disconnect() {
     rv.SuppressException();
   }
 
-  NS_ReleaseOnMainThreadSystemGroup("WebSocketImpl::mChannel",
-                                    mChannel.forget());
-  NS_ReleaseOnMainThreadSystemGroup("WebSocketImpl::mService",
-                                    mService.forget());
+  NS_ReleaseOnMainThread("WebSocketImpl::mChannel", mChannel.forget());
+  NS_ReleaseOnMainThread("WebSocketImpl::mService", mService.forget());
 
   mWebSocket->DontKeepAliveAnyMore();
   mWebSocket->mImpl = nullptr;

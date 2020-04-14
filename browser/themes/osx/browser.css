@@ -244,18 +244,6 @@
 
 %include ../shared/urlbar-searchbar.inc.css
 
-@supports not -moz-bool-pref("browser.urlbar.update1") {
-  :root {
-    --toolbar-field-focus-border-color: -moz-mac-focusring;
-  }
-
-  #searchbar:focus-within,
-  #urlbar:not(.megabar)[focused="true"] {
-    box-shadow: 0 0 0 1px var(--toolbar-field-focus-border-color) inset,
-                0 0 0 1px var(--toolbar-field-focus-border-color);
-  }
-}
-
 #urlbar,
 #searchbar {
   font-size: 1.25em;
@@ -311,14 +299,12 @@
 
 #BMB_bookmarksPopup[side="top"],
 #BMB_bookmarksPopup[side="bottom"] {
-  margin-left: -26px;
-  margin-right: -26px;
+  margin-inline: -26px;
 }
 
 #BMB_bookmarksPopup[side="left"],
 #BMB_bookmarksPopup[side="right"] {
-  margin-top: -26px;
-  margin-bottom: -26px;
+  margin-block: -26px;
 }
 
 /* Bookmarking panel */
@@ -400,7 +386,7 @@
   box-shadow: var(--focus-ring-box-shadow);
 }
 
-#editBMPanel_folderMenuList > .menulist-dropmarker {
+#editBMPanel_folderMenuList::part(dropmarker) {
   -moz-appearance: none;
   -moz-context-properties: fill, fill-opacity;
   fill: currentColor;
@@ -531,8 +517,7 @@
 %include ../shared/tabs.inc.css
 
 .tab-label {
-  margin-top: 1px;
-  margin-bottom: 0;
+  margin-block: 1px 0;
 }
 
 .tabbrowser-tab:not(:hover) > .tab-stack > .tab-content > .tab-icon-image:not([selected="true"]):not([multiselected]) {
@@ -597,8 +582,7 @@
 
 #tabbrowser-tabs {
   -moz-box-align: stretch;
-  padding-left: 0;
-  padding-right: 0;
+  padding-inline: 0;
   margin-bottom: 0;
   position: static;
 }
@@ -622,14 +606,12 @@ notification[value="translation"] {
   background-image: none;
   border-top: none;
   border-bottom: 1px solid #c4c4c4;
-  padding-top: 1px;
-  padding-bottom: 1px;
+  padding-block: 1px;
   min-height: 35px;
 }
 
 .translate-infobar-element {
-  margin-top: 0 !important;
-  margin-bottom: 0 !important;
+  margin-block: 0 !important;
 }
 
 button.translate-infobar-element {
@@ -643,13 +625,11 @@ button.translate-infobar-element {
   min-height: 22px;
   min-width: 0;
   padding: 0 0.8em;
-  margin-left: 0.25em;
-  margin-right: 0.25em;
+  margin-inline: 0.25em;
 }
 
 button.translate-infobar-element .button-text {
-  margin-left: 0;
-  margin-right: 0;
+  margin-inline: 0;
 }
 
 label.translate-infobar-element {
@@ -680,8 +660,7 @@ button.translate-infobar-element[anonid="translate"]:hover {
 }
 
 button.translate-infobar-element.options-menu-button {
-  padding-inline-start: 0.5em;
-  padding-inline-end: 0;
+  padding-inline: 0.5em 0;
 }
 
 button.translate-infobar-element.options-menu-button > .button-box > .button-menu-dropmarker {
@@ -705,7 +684,7 @@ menulist.translate-infobar-element {
   min-height: 22px !important;
 }
 
-menulist.translate-infobar-element > .menulist-label-box {
+menulist.translate-infobar-element::part(label-box) {
   padding-top: 1px;
   padding-inline-start: 0.3em;
   margin-block: 0;
@@ -721,7 +700,7 @@ menulist.translate-infobar-element[open="true"] {
                                     rgba(255,255,255,0.6));
 }
 
-menulist.translate-infobar-element > .menulist-dropmarker {
+menulist.translate-infobar-element::part(dropmarker) {
   display: -moz-box;
   list-style-image: url("chrome://global/skin/icons/arrow-dropdown-12.svg");
 }
@@ -794,8 +773,7 @@ menulist.translate-infobar-element > .menulist-dropmarker {
 %include ../shared/contextmenu.inc.css
 
 #context-navigation > .menuitem-iconic {
-  padding-left: 0;
-  padding-right: 0;
+  padding-inline: 0;
 }
 
 .cui-widget-panelview[id^=PanelUI-webext-] {

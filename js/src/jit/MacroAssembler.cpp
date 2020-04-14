@@ -2273,11 +2273,21 @@ void MacroAssembler::convertValueToInt(
   mov(ImmWord(0), output);
   jump(&done);
 
-  // Try converting a string into a double, then jump to the double case.
+  // |output| needs to be different from |stringReg| to load string indices.
+  bool handleStringIndices = handleStrings && output != stringReg;
+
+  // First try loading a string index. If that fails, try converting a string
+  // into a double, then jump to the double case.
+  Label handleStringIndex;
   if (handleStrings) {
     bind(&isString);
     unboxString(value, stringReg);
-    jump(handleStringEntry);
+    if (handleStringIndices) {
+      loadStringIndexValue(stringReg, output, handleStringEntry);
+      jump(&handleStringIndex);
+    } else {
+      jump(handleStringEntry);
+    }
   }
 
   // Try converting double into integer.
@@ -2303,9 +2313,16 @@ void MacroAssembler::convertValueToInt(
   }
 
   // Integers can be unboxed.
-  if (isInt32.used()) {
-    bind(&isInt32);
-    unboxInt32(value, output);
+  if (isInt32.used() || handleStringIndices) {
+    if (isInt32.used()) {
+      bind(&isInt32);
+      unboxInt32(value, output);
+    }
+
+    if (handleStringIndices) {
+      bind(&handleStringIndex);
+    }
+
     if (behavior == IntConversionBehavior::ClampToUint8) {
       clampIntToUint8(output);
     }
@@ -2869,6 +2886,52 @@ void MacroAssembler::moveRegPair(Register src0, Register src1, Register dst0,
   MoveEmitter emitter(*this);
   emitter.emit(moves);
   emitter.finish();
+}
+
+// ===============================================================
+// Arithmetic functions
+
+void MacroAssembler::pow32(Register base, Register power, Register dest,
+                           Register temp1, Register temp2, Label* onOver) {
+  // Inline int32-specialized implementation of js::powi with overflow
+  // detection.
+
+  move32(Imm32(1), dest);  // p = 1
+
+  // x^y where x == 1 returns 1 for any y.
+  Label done;
+  branch32(Assembler::Equal, base, Imm32(1), &done);
+
+  move32(base, temp1);   // m = x
+  move32(power, temp2);  // n = y
+
+  // x^y where y < 0 returns a non-int32 value for any x != 1. Except when y is
+  // large enough so that the result is no longer representable as a double with
+  // fractional parts. We can't easily determine when y is too large, so we bail
+  // here.
+  Label start;
+  branchTest32(Assembler::NotSigned, power, power, &start);
+  jump(onOver);
+
+  Label loop;
+  bind(&loop);
+
+  // m *= m
+  branchMul32(Assembler::Overflow, temp1, temp1, onOver);
+
+  bind(&start);
+
+  // if ((n & 1) != 0) p *= m
+  Label even;
+  branchTest32(Assembler::Zero, temp2, Imm32(1), &even);
+  branchMul32(Assembler::Overflow, temp1, dest, onOver);
+  bind(&even);
+
+  // n >>= 1
+  // if (n == 0) return p
+  branchRshift32(Assembler::NonZero, Imm32(1), temp2, &loop);
+
+  bind(&done);
 }
 
 // ===============================================================

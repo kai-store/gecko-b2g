@@ -9,6 +9,7 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerRange.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/ReentrancyGuard.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Unused.h"
@@ -196,6 +197,15 @@ void js::CheckTracedThing(JSTracer* trc, T* thing) {
 #ifdef DEBUG
   MOZ_ASSERT(trc);
   MOZ_ASSERT(thing);
+
+  // Check that CellHeader is the first field in the cell.
+  static_assert(
+      std::is_base_of_v<CellHeader, std::remove_const_t<std::remove_reference_t<
+                                        decltype(thing->cellHeader())>>>,
+      "GC things must provide a cellHeader() method that returns a reference "
+      "to the cell header");
+  MOZ_ASSERT(static_cast<const void*>(&thing->cellHeader()) ==
+             static_cast<const void*>(thing));
 
   if (!trc->checkEdges()) {
     return;
@@ -1126,7 +1136,7 @@ void BaseScript::traceChildren(JSTracer* trc) {
 }
 
 void Shape::traceChildren(JSTracer* trc) {
-  TraceEdge(trc, &base_, "base");
+  TraceEdge(trc, &headerAndBase_, "base");
   TraceEdge(trc, &propidRef(), "propid");
   if (parent) {
     TraceEdge(trc, &parent, "parent");
@@ -1356,14 +1366,14 @@ void WasmFunctionScope::Data::trace(JSTracer* trc) {
   TraceBindingNames(trc, trailingNames.start(), length);
 }
 void Scope::traceChildren(JSTracer* trc) {
-  TraceNullableEdge(trc, &enclosing_, "scope enclosing");
+  TraceNullableEdge(trc, &headerAndEnclosingScope_, "scope enclosing");
   TraceNullableEdge(trc, &environmentShape_, "scope env shape");
   applyScopeDataTyped([trc](auto data) { data->trace(trc); });
 }
 inline void js::GCMarker::eagerlyMarkChildren(Scope* scope) {
   do {
-    if (scope->environmentShape_) {
-      traverseEdge(scope, scope->environmentShape_.get());
+    if (scope->environmentShape()) {
+      traverseEdge(scope, scope->environmentShape());
     }
     TrailingNamesArray* names = nullptr;
     uint32_t length = 0;
@@ -1448,7 +1458,7 @@ inline void js::GCMarker::eagerlyMarkChildren(Scope* scope) {
         traverseStringEdge(scope, names->get(i).name());
       }
     }
-    scope = scope->enclosing_;
+    scope = scope->enclosing();
   } while (scope && mark(scope));
 }
 
@@ -1955,8 +1965,7 @@ scan_obj : {
   }
 
   markImplicitEdges(obj);
-  ObjectGroup* group = obj->groupFromGC();
-  traverseEdge(obj, group);
+  traverseEdge(obj, obj->groupRaw());
 
   NativeObject* nobj = CallTraceHook(
       [this, obj](auto thingp) { this->traverseEdge(obj, *thingp); }, this, obj,
@@ -2806,8 +2815,10 @@ bool GCMarker::markAllDelayedChildren(SliceBudget& budget) {
   MOZ_ASSERT(markColor() == MarkColor::Black);
 
   GCRuntime& gc = runtime()->gc;
-  gcstats::AutoPhase ap(gc.stats(), gc.state() == State::Mark,
-                        gcstats::PhaseKind::MARK_DELAYED);
+  mozilla::Maybe<gcstats::AutoPhase> ap;
+  if (gc.state() == State::Mark) {
+    ap.emplace(gc.stats(), gcstats::PhaseKind::MARK_DELAYED);
+  }
 
   // We have a list of arenas containing marked cells with unmarked children
   // where we ran out of stack space during marking.
@@ -3073,8 +3084,8 @@ void js::gc::StoreBuffer::WholeCellBuffer::trace(TenuringTracer& mover) {
 
 template <typename T>
 void js::gc::StoreBuffer::CellPtrEdge<T>::trace(TenuringTracer& mover) const {
-  static_assert(std::is_base_of<Cell, T>::value, "T must be a Cell type");
-  static_assert(!std::is_base_of<TenuredCell, T>::value,
+  static_assert(std::is_base_of_v<Cell, T>, "T must be a Cell type");
+  static_assert(!std::is_base_of_v<TenuredCell, T>,
                 "T must not be a tenured Cell type");
 
   if (!*edge) {
@@ -3236,8 +3247,7 @@ JSObject* js::TenuringTracer::moveToTenuredSlow(JSObject* src) {
                   CanNurseryAllocateFinalizedClass(src->getClass()));
   }
 
-  RelocationOverlay* overlay = RelocationOverlay::fromCell(src);
-  overlay->forwardTo(dst);
+  RelocationOverlay* overlay = RelocationOverlay::forwardCell(src, dst);
   insertIntoObjectFixupList(overlay);
 
   gcTracer.tracePromoteToTenured(src, dst);
@@ -3268,8 +3278,7 @@ inline JSObject* js::TenuringTracer::movePlainObjectToTenured(
 
   MOZ_ASSERT(!dst->getClass()->extObjectMovedOp());
 
-  RelocationOverlay* overlay = RelocationOverlay::fromCell(src);
-  overlay->forwardTo(dst);
+  RelocationOverlay* overlay = RelocationOverlay::forwardCell(src, dst);
   insertIntoObjectFixupList(overlay);
 
   gcTracer.tracePromoteToTenured(src, dst);
@@ -3387,8 +3396,7 @@ JSString* js::TenuringTracer::moveToTenured(JSString* src) {
   tenuredSize += moveStringToTenured(dst, src, dstKind);
   tenuredCells++;
 
-  RelocationOverlay* overlay = RelocationOverlay::fromCell(src);
-  overlay->forwardTo(dst);
+  RelocationOverlay* overlay = RelocationOverlay::forwardCell(src, dst);
   insertIntoStringFixupList(overlay);
 
   gcTracer.tracePromoteToTenured(src, dst);
@@ -3414,8 +3422,7 @@ JS::BigInt* js::TenuringTracer::moveToTenured(JS::BigInt* src) {
   tenuredSize += moveBigIntToTenured(dst, src, dstKind);
   tenuredCells++;
 
-  RelocationOverlay* overlay = RelocationOverlay::fromCell(src);
-  overlay->forwardTo(dst);
+  RelocationOverlay* overlay = RelocationOverlay::forwardCell(src, dst);
   insertIntoBigIntFixupList(overlay);
 
   gcTracer.tracePromoteToTenured(src, dst);
@@ -3569,9 +3576,9 @@ static inline bool ShouldCheckMarkState(JSRuntime* rt, T** thingp) {
 
 template <typename T>
 struct MightBeNurseryAllocated {
-  static const bool value = std::is_base_of<JSObject, T>::value ||
-                            std::is_base_of<JSString, T>::value ||
-                            std::is_base_of<JS::BigInt, T>::value;
+  static const bool value = std::is_base_of_v<JSObject, T> ||
+                            std::is_base_of_v<JSString, T> ||
+                            std::is_base_of_v<JS::BigInt, T>;
 };
 
 template <typename T>
@@ -3889,10 +3896,6 @@ bool js::gc::UnmarkGrayGCThingUnchecked(JSRuntime* rt, JS::GCCellPtr thing) {
       TlsContext.get(), "UnmarkGrayGCThing", JS::ProfilingCategoryPair::GCCC);
 
   UnmarkGrayTracer unmarker(rt);
-  // We don't record phaseTimes when we're running on a helper thread.
-  bool enable = TlsContext.get()->isMainThreadContext();
-  gcstats::AutoPhase innerPhase(rt->gc.stats(), enable,
-                                gcstats::PhaseKind::UNMARK_GRAY);
   unmarker.unmark(thing);
   return unmarker.unmarkedAny;
 }
@@ -3903,6 +3906,7 @@ JS_FRIEND_API bool JS::UnmarkGrayGCThingRecursively(JS::GCCellPtr thing) {
 
   JSRuntime* rt = thing.asCell()->runtimeFromMainThread();
   gcstats::AutoPhase outerPhase(rt->gc.stats(), gcstats::PhaseKind::BARRIER);
+  gcstats::AutoPhase innerPhase(rt->gc.stats(), gcstats::PhaseKind::UNMARK_GRAY);
   return UnmarkGrayGCThingUnchecked(rt, thing);
 }
 

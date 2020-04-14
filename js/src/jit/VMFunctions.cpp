@@ -6,6 +6,8 @@
 
 #include "jit/VMFunctions.h"
 
+#include "mozilla/FloatingPoint.h"
+
 #include "builtin/String.h"
 #include "builtin/TypedObject.h"
 #include "frontend/BytecodeCompiler.h"
@@ -375,26 +377,6 @@ template bool StrictlyEqual<EqualityKind::NotEqual>(JSContext* cx,
                                                     MutableHandleValue lhs,
                                                     MutableHandleValue rhs,
                                                     bool* res);
-
-bool LessThan(JSContext* cx, MutableHandleValue lhs, MutableHandleValue rhs,
-              bool* res) {
-  return LessThanOperation(cx, lhs, rhs, res);
-}
-
-bool LessThanOrEqual(JSContext* cx, MutableHandleValue lhs,
-                     MutableHandleValue rhs, bool* res) {
-  return LessThanOrEqualOperation(cx, lhs, rhs, res);
-}
-
-bool GreaterThan(JSContext* cx, MutableHandleValue lhs, MutableHandleValue rhs,
-                 bool* res) {
-  return GreaterThanOperation(cx, lhs, rhs, res);
-}
-
-bool GreaterThanOrEqual(JSContext* cx, MutableHandleValue lhs,
-                        MutableHandleValue rhs, bool* res) {
-  return GreaterThanOrEqualOperation(cx, lhs, rhs, res);
-}
 
 template <EqualityKind Kind>
 bool StringsEqual(JSContext* cx, HandleString lhs, HandleString rhs,
@@ -837,6 +819,18 @@ void PostGlobalWriteBarrier(JSRuntime* rt, GlobalObject* obj) {
     PostWriteBarrier(rt, obj);
     obj->realm()->globalWriteBarriered = 1;
   }
+}
+
+bool GetInt32FromStringPure(JSContext* cx, JSString* str, int32_t* result) {
+  // We shouldn't GC here as this is called directly from IC code.
+  AutoUnsafeCallWithABI unsafe;
+
+  double d;
+  if (!StringToNumberPure(cx, str, &d)) {
+    return false;
+  }
+
+  return mozilla::NumberIsInt32(d, result);
 }
 
 int32_t GetIndexFromString(JSString* str) {
@@ -1991,11 +1985,6 @@ bool IsPossiblyWrappedTypedArray(JSContext* cx, JSObject* obj, bool* result) {
 
   *result = unwrapped->is<TypedArrayObject>();
   return true;
-}
-
-bool DoToNumber(JSContext* cx, HandleValue arg, MutableHandleValue ret) {
-  ret.set(arg);
-  return ToNumber(cx, ret);
 }
 
 bool DoToNumeric(JSContext* cx, HandleValue arg, MutableHandleValue ret) {

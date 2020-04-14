@@ -1475,8 +1475,9 @@ HttpTrafficCategory nsHttpChannel::CreateTrafficCategory() {
     }
   }
 
-  bool isSystemPrincipal = mLoadInfo->LoadingPrincipal() &&
-                           mLoadInfo->LoadingPrincipal()->IsSystemPrincipal();
+  bool isSystemPrincipal =
+      mLoadInfo->GetLoadingPrincipal() &&
+      mLoadInfo->GetLoadingPrincipal()->IsSystemPrincipal();
   return HttpTrafficAnalyzer::CreateTrafficCategory(
       NS_UsePrivateBrowsing(this), isSystemPrincipal, isThirdParty, cos, tc);
 }
@@ -1630,8 +1631,8 @@ nsresult EnsureMIMEOfScript(nsHttpChannel* aChannel, nsIURI* aURI,
 
   bool isPrivateWin = aLoadInfo->GetOriginAttributes().mPrivateBrowsingId > 0;
   bool isSameOrigin = false;
-  aLoadInfo->LoadingPrincipal()->IsSameOrigin(aURI, isPrivateWin,
-                                              &isSameOrigin);
+  aLoadInfo->GetLoadingPrincipal()->IsSameOrigin(aURI, isPrivateWin,
+                                                 &isSameOrigin);
   if (isSameOrigin) {
     // same origin
     AccumulateCategorical(
@@ -1651,7 +1652,7 @@ nsresult EnsureMIMEOfScript(nsHttpChannel* aChannel, nsIURI* aURI,
           bool isPrivateWin =
               aLoadInfo->GetOriginAttributes().mPrivateBrowsingId > 0;
           bool isSameOrigin = false;
-          aLoadInfo->LoadingPrincipal()->IsSameOrigin(
+          aLoadInfo->GetLoadingPrincipal()->IsSameOrigin(
               corsOriginURI, isPrivateWin, &isSameOrigin);
           if (isSameOrigin) {
             cors = true;
@@ -6427,8 +6428,8 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
           mLoadInfo->GetInitialSecurityCheckDone() ||
           (mLoadInfo->GetSecurityMode() ==
                nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL &&
-           mLoadInfo->LoadingPrincipal() &&
-           mLoadInfo->LoadingPrincipal()->IsSystemPrincipal()),
+           mLoadInfo->GetLoadingPrincipal() &&
+           mLoadInfo->GetLoadingPrincipal()->IsSystemPrincipal()),
       "security flags in loadInfo but doContentSecurityCheck() not called");
 
   LOG(("nsHttpChannel::AsyncOpen [this=%p]\n", this));
@@ -7021,21 +7022,32 @@ base::ProcessId nsHttpChannel::ProcessId() {
   return base::GetCurrentProcId();
 }
 
-bool nsHttpChannel::AttachStreamFilter(
-    mozilla::ipc::Endpoint<extensions::PStreamFilterParent>&& aEndpoint)
-
-{
+auto nsHttpChannel::AttachStreamFilter(base::ProcessId aChildProcessId)
+    -> RefPtr<ChildEndpointPromise> {
   nsCOMPtr<nsIParentChannel> parentChannel;
   NS_QueryNotificationCallbacks(this, parentChannel);
-  if (RefPtr<HttpChannelParent> httpParent = do_QueryObject(parentChannel)) {
-    return httpParent->SendAttachStreamFilter(std::move(aEndpoint));
-  }
+
   if (RefPtr<DocumentLoadListener> docParent = do_QueryObject(parentChannel)) {
-    return docParent->AttachStreamFilter(std::move(aEndpoint));
+    return docParent->AttachStreamFilter(aChildProcessId);
   }
 
-  extensions::StreamFilterParent::Attach(this, std::move(aEndpoint));
-  return true;
+  mozilla::ipc::Endpoint<extensions::PStreamFilterParent> parent;
+  mozilla::ipc::Endpoint<extensions::PStreamFilterChild> child;
+  nsresult rv = extensions::PStreamFilter::CreateEndpoints(
+      ProcessId(), aChildProcessId, &parent, &child);
+  if (NS_FAILED(rv)) {
+    return ChildEndpointPromise::CreateAndReject(false, __func__);
+  }
+
+  if (RefPtr<HttpChannelParent> httpParent = do_QueryObject(parentChannel)) {
+    if (httpParent->SendAttachStreamFilter(std::move(parent))) {
+      return ChildEndpointPromise::CreateAndResolve(std::move(child), __func__);
+    }
+    return ChildEndpointPromise::CreateAndReject(false, __func__);
+  }
+
+  extensions::StreamFilterParent::Attach(this, std::move(parent));
+  return ChildEndpointPromise::CreateAndResolve(std::move(child), __func__);
 }
 
 NS_IMETHODIMP
@@ -7647,7 +7659,7 @@ nsresult nsHttpChannel::ProcessCrossOriginResourcePolicyHeader() {
     return NS_OK;
   }
 
-  MOZ_ASSERT(mLoadInfo->LoadingPrincipal(),
+  MOZ_ASSERT(mLoadInfo->GetLoadingPrincipal(),
              "Resources should always have a LoadingPrincipal");
   if (!mResponseHead) {
     return NS_OK;
@@ -7682,7 +7694,7 @@ nsresult nsHttpChannel::ProcessCrossOriginResourcePolicyHeader() {
   // Cross-Origin-Resource-Policy = %s"same-origin" / %s"same-site" /
   // %s"cross-origin"
   if (content.EqualsLiteral("same-origin")) {
-    if (!channelOrigin->Equals(mLoadInfo->LoadingPrincipal())) {
+    if (!channelOrigin->Equals(mLoadInfo->GetLoadingPrincipal())) {
       return NS_ERROR_DOM_CORP_FAILED;
     }
     return NS_OK;
@@ -7690,14 +7702,14 @@ nsresult nsHttpChannel::ProcessCrossOriginResourcePolicyHeader() {
   if (content.EqualsLiteral("same-site")) {
     nsAutoCString documentBaseDomain;
     nsAutoCString resourceBaseDomain;
-    mLoadInfo->LoadingPrincipal()->GetBaseDomain(documentBaseDomain);
+    mLoadInfo->GetLoadingPrincipal()->GetBaseDomain(documentBaseDomain);
     channelOrigin->GetBaseDomain(resourceBaseDomain);
     if (documentBaseDomain != resourceBaseDomain) {
       return NS_ERROR_DOM_CORP_FAILED;
     }
 
     nsCOMPtr<nsIURI> resourceURI = channelOrigin->GetURI();
-    if (!mLoadInfo->LoadingPrincipal()->SchemeIs("https") &&
+    if (!mLoadInfo->GetLoadingPrincipal()->SchemeIs("https") &&
         resourceURI->SchemeIs("https")) {
       return NS_ERROR_DOM_CORP_FAILED;
     }
@@ -9347,13 +9359,6 @@ nsHttpChannel::OnLookupComplete(nsICancelable* request, nsIDNSRecord* rec,
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsHttpChannel::OnLookupByTypeComplete(nsICancelable* aRequest,
-                                      nsIDNSByTypeRecord* aRes,
-                                      nsresult aStatus) {
-  return NS_OK;
-}
-
 //-----------------------------------------------------------------------------
 // nsHttpChannel internal functions
 //-----------------------------------------------------------------------------
@@ -10451,7 +10456,7 @@ void nsHttpChannel::ReEvaluateReferrerAfterTrackingStatusIsKnown() {
   if (!cjs) {
     cjs = net::CookieJarSettings::Create();
   }
-  if (cjs->GetRejectThirdPartyTrackers()) {
+  if (cjs->GetRejectThirdPartyContexts()) {
     bool isPrivate = mLoadInfo->GetOriginAttributes().mPrivateBrowsingId > 0;
     // If our referrer has been set before, and our referrer policy is unset
     // (default policy) if we thought the channel wasn't a third-party

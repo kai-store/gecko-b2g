@@ -71,7 +71,6 @@
 #include "mozilla/Services.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/ScriptPreloader.h"
-#include "mozilla/SystemGroup.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/BackgroundHangMonitor.h"
 
@@ -328,9 +327,6 @@ NS_InitXPCOM(nsIServiceManager** aResult, nsIFile* aBinDirectory,
   }
   AUTO_PROFILER_INIT2;
 
-  // Init the mozilla::SystemGroup for dispatching main thread runnables.
-  mozilla::SystemGroup::InitStatic();
-
   // Set up the timer globals/timer thread
   rv = nsTimerImpl::Startup();
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -520,9 +516,6 @@ NS_InitMinimalXPCOM() {
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
-
-  // Init the mozilla::SystemGroup for dispatching main thread runnables.
-  mozilla::SystemGroup::InitStatic();
 
   // Set up the timer globals/timer thread.
   rv = nsTimerImpl::Startup();
@@ -761,10 +754,8 @@ nsresult ShutdownXPCOM(nsIServiceManager* aServMgr) {
       // of crashing.
 #if defined(DEBUG) && !defined(ANDROID)
       if (!getenv("MOZ_IGNORE_NSS_SHUTDOWN_LEAKS") &&
-          !getenv("XPCOM_MEM_BLOAT_LOG") &&
-          !getenv("XPCOM_MEM_LEAK_LOG") &&
-          !getenv("XPCOM_MEM_REFCNT_LOG") &&
-          !getenv("XPCOM_MEM_COMPTR_LOG")) {
+          !getenv("XPCOM_MEM_BLOAT_LOG") && !getenv("XPCOM_MEM_LEAK_LOG") &&
+          !getenv("XPCOM_MEM_REFCNT_LOG") && !getenv("XPCOM_MEM_COMPTR_LOG")) {
         MOZ_CRASH("NSS_Shutdown failed");
       } else {
 #  ifdef NS_BUILD_REFCNT_LOGGING
@@ -788,9 +779,6 @@ nsresult ShutdownXPCOM(nsIServiceManager* aServMgr) {
   }
   nsComponentManagerImpl::gComponentManager = nullptr;
   nsCategoryManager::Destroy();
-
-  // Shut down SystemGroup for main thread dispatching.
-  SystemGroup::Shutdown();
 
   GkRust_Shutdown();
 

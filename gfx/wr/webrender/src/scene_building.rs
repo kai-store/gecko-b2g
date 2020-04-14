@@ -23,7 +23,7 @@ use crate::intern::Interner;
 use crate::internal_types::{FastHashMap, FastHashSet, LayoutPrimitiveInfo, Filter};
 use crate::picture::{Picture3DContext, PictureCompositeMode, PicturePrimitive, PictureOptions};
 use crate::picture::{BlitReason, OrderedPictureChild, PrimitiveList, TileCacheInstance, ClusterFlags};
-use crate::prim_store::{PrimitiveInstance, PrimitiveSceneData};
+use crate::prim_store::PrimitiveInstance;
 use crate::prim_store::{PrimitiveInstanceKind, NinePatchDescriptor, PrimitiveStore};
 use crate::prim_store::{ScrollNodeAndClipChain, PictureIndex};
 use crate::prim_store::{InternablePrimitive, SegmentInstanceIndex};
@@ -1589,12 +1589,7 @@ impl<'a> SceneBuilder<'a> {
         let current_offset = self.current_offset(spatial_node_index);
         let interner = self.interners.as_mut();
         let prim_data_handle = interner
-            .intern(&prim_key, || {
-                PrimitiveSceneData {
-                    prim_size: info.rect.size,
-                    flags: info.flags,
-                }
-            });
+            .intern(&prim_key, || ());
 
         let instance_kind = P::make_instance_kind(
             prim_key,
@@ -2058,7 +2053,6 @@ impl<'a> SceneBuilder<'a> {
         let mut cur_instance = create_prim_instance(
             leaf_pic_index,
             leaf_composite_mode.into(),
-            stacking_context.prim_flags,
             ClipChainId::NONE,
             &mut self.interners,
         );
@@ -2110,7 +2104,6 @@ impl<'a> SceneBuilder<'a> {
             cur_instance = create_prim_instance(
                 current_pic_index,
                 PictureCompositeKey::Identity,
-                stacking_context.prim_flags,
                 ClipChainId::NONE,
                 &mut self.interners,
             );
@@ -2174,7 +2167,6 @@ impl<'a> SceneBuilder<'a> {
             cur_instance = create_prim_instance(
                 blend_pic_index,
                 composite_mode.into(),
-                stacking_context.prim_flags,
                 ClipChainId::NONE,
                 &mut self.interners,
             );
@@ -2596,20 +2588,12 @@ impl<'a> SceneBuilder<'a> {
                         );
 
                         let shadow_pic_key = PictureKey::new(
-                            PrimitiveFlags::IS_BACKFACE_VISIBLE,
-                            LayoutSize::zero(),
                             Picture { composite_mode_key },
                         );
 
                         let shadow_prim_data_handle = self.interners
                             .picture
-                            .intern(&shadow_pic_key, || {
-                                PrimitiveSceneData {
-                                    prim_size: LayoutSize::zero(),
-                                    flags: PrimitiveFlags::IS_BACKFACE_VISIBLE,
-                                }
-                            }
-                        );
+                            .intern(&shadow_pic_key, || ());
 
                         let shadow_prim_instance = PrimitiveInstance::new(
                             LayoutPoint::zero(),
@@ -3350,7 +3334,6 @@ impl<'a> SceneBuilder<'a> {
             instance = create_prim_instance(
                 backdrop_pic_index,
                 composite_mode.into(),
-                prim_flags,
                 clip_chain_id,
                 &mut self.interners,
             );
@@ -3537,7 +3520,6 @@ impl<'a> SceneBuilder<'a> {
             cur_instance = create_prim_instance(
                 current_pic_index,
                 composite_mode.into(),
-                flags,
                 ClipChainId::NONE,
                 &mut self.interners,
             );
@@ -3608,7 +3590,6 @@ impl<'a> SceneBuilder<'a> {
             cur_instance = create_prim_instance(
                 current_pic_index,
                 Some(composite_mode).into(),
-                flags,
                 ClipChainId::NONE,
                 &mut self.interners,
             );
@@ -3924,7 +3905,6 @@ impl FlattenedStackingContext {
         let prim_instance = create_prim_instance(
             pic_index,
             composite_mode.into(),
-            self.prim_flags,
             self.clip_chain_id,
             interners,
         );
@@ -3992,25 +3972,16 @@ impl From<PendingPrimitive<TextRun>> for ShadowItem {
 fn create_prim_instance(
     pic_index: PictureIndex,
     composite_mode_key: PictureCompositeKey,
-    flags: PrimitiveFlags,
     clip_chain_id: ClipChainId,
     interners: &mut Interners,
 ) -> PrimitiveInstance {
     let pic_key = PictureKey::new(
-        flags,
-        LayoutSize::zero(),
         Picture { composite_mode_key },
     );
 
     let data_handle = interners
         .picture
-        .intern(&pic_key, || {
-            PrimitiveSceneData {
-                prim_size: LayoutSize::zero(),
-                flags,
-            }
-        }
-    );
+        .intern(&pic_key, || ());
 
     PrimitiveInstance::new(
         LayoutPoint::zero(),
@@ -4129,8 +4100,6 @@ fn create_tile_cache(
     // Now, create a picture with tile caching enabled that will hold all
     // of the primitives selected as belonging to the main scroll root.
     let pic_key = PictureKey::new(
-        PrimitiveFlags::IS_BACKFACE_VISIBLE,
-        LayoutSize::zero(),
         Picture {
             composite_mode_key: PictureCompositeKey::Identity,
         },
@@ -4138,13 +4107,7 @@ fn create_tile_cache(
 
     let pic_data_handle = interners
         .picture
-        .intern(&pic_key, || {
-            PrimitiveSceneData {
-                prim_size: LayoutSize::zero(),
-                flags: PrimitiveFlags::IS_BACKFACE_VISIBLE,
-            }
-        }
-        );
+        .intern(&pic_key, || ());
 
     // Build a clip-chain for the tile cache, that contains any of the shared clips
     // we will apply when drawing the tiles. In all cases provided by Gecko, these

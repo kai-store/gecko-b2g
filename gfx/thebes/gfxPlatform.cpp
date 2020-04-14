@@ -199,7 +199,6 @@ static void ShutdownCMS();
 
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/SourceSurfaceCairo.h"
-using namespace mozilla::gfx;
 
 /* Class to listen for pref changes so that chrome code can dynamically
    force sRGB as an output profile. See Bug #452125. */
@@ -1230,6 +1229,23 @@ static bool IsFeatureSupported(long aFeature, bool aDefault) {
   }
   return status == nsIGfxInfo::FEATURE_STATUS_OK;
 }
+
+static void ApplyGfxInfoFeature(long aFeature, FeatureState& aFeatureState) {
+  nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+  nsCString blockId;
+  int32_t status;
+  if (!NS_SUCCEEDED(gfxInfo->GetFeatureStatus(aFeature, blockId, &status))) {
+    aFeatureState.Disable(FeatureStatus::BlockedNoGfxInfo, "gfxInfo is broken",
+                          NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_GFX_INFO"));
+
+  } else {
+    if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
+      aFeatureState.Disable(FeatureStatus::Blacklisted,
+                            "Blacklisted by gfxInfo", blockId);
+    }
+  }
+}
+
 /* static*/
 bool gfxPlatform::IsDXInterop2Blocked() {
   return !IsFeatureSupported(nsIGfxInfo::FEATURE_DX_INTEROP2, false);
@@ -2025,10 +2041,10 @@ bool gfxPlatform::IsFontFormatSupported(uint32_t aFormatFlags) {
 
 gfxFontGroup* gfxPlatform::CreateFontGroup(
     const FontFamilyList& aFontFamilyList, const gfxFontStyle* aStyle,
-    gfxTextPerfMetrics* aTextPerf, gfxUserFontSet* aUserFontSet,
-    gfxFloat aDevToCssSize) const {
-  return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf, aUserFontSet,
-                          aDevToCssSize);
+    gfxTextPerfMetrics* aTextPerf, FontMatchingStats* aFontMatchingStats,
+    gfxUserFontSet* aUserFontSet, gfxFloat aDevToCssSize) const {
+  return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf,
+                          aFontMatchingStats, aUserFontSet, aDevToCssSize);
 }
 
 gfxFontEntry* gfxPlatform::LookupLocalFont(const nsACString& aFontName,
@@ -2246,29 +2262,33 @@ DeviceColor gfxPlatform::TransformPixel(const sRGBColor& in,
 }
 
 nsTArray<uint8_t> gfxPlatform::GetPlatformCMSOutputProfileData() {
-  return nsTArray<uint8_t>();
+  return GetPrefCMSOutputProfileData();
 }
 
-nsTArray<uint8_t> gfxPlatform::GetCMSOutputProfileData() {
+nsTArray<uint8_t> gfxPlatform::GetPrefCMSOutputProfileData() {
   nsAutoCString fname;
   Preferences::GetCString("gfx.color_management.display_profile", fname);
 
   if (fname.IsEmpty()) {
-    return gfxPlatform::GetPlatform()->GetPlatformCMSOutputProfileData();
+    return nsTArray<uint8_t>();
   }
 
   void* mem = nullptr;
   size_t size = 0;
   qcms_data_from_path(fname.get(), &mem, &size);
-  if (mem == nullptr) {
-    return gfxPlatform::GetPlatform()->GetPlatformCMSOutputProfileData();
-  }
 
   nsTArray<uint8_t> result;
-  result.AppendElements(static_cast<uint8_t*>(mem), size);
-  free(mem);
+
+  if (mem) {
+    result.AppendElements(static_cast<uint8_t*>(mem), size);
+    free(mem);
+  }
 
   return result;
+}
+
+const mozilla::gfx::ContentDeviceData* gfxPlatform::GetInitContentDeviceData() {
+  return gContentDeviceInitData;
 }
 
 void gfxPlatform::CreateCMSOutputProfile() {
@@ -2285,7 +2305,8 @@ void gfxPlatform::CreateCMSOutputProfile() {
     }
 
     if (!gCMSOutputProfile) {
-      nsTArray<uint8_t> outputProfileData = GetCMSOutputProfileData();
+      nsTArray<uint8_t> outputProfileData =
+          gfxPlatform::GetPlatform()->GetPlatformCMSOutputProfileData();
       if (!outputProfileData.IsEmpty()) {
         gCMSOutputProfile = qcms_profile_from_memory(
             outputProfileData.Elements(), outputProfileData.Length());
@@ -3090,10 +3111,7 @@ void gfxPlatform::InitWebRenderConfig() {
     featureComp.UserForceEnable("Force enabled by pref");
   }
 
-  if (!IsFeatureSupported(nsIGfxInfo::FEATURE_WEBRENDER_COMPOSITOR, false)) {
-    featureComp.Disable(FeatureStatus::Blacklisted, "Blacklisted",
-                        NS_LITERAL_CSTRING("FEATURE_FAILURE_BLACKLIST"));
-  }
+  ApplyGfxInfoFeature(nsIGfxInfo::FEATURE_WEBRENDER_COMPOSITOR, featureComp);
 
 #ifdef XP_WIN
   if (!gfxVars::UseWebRenderDCompWin()) {
@@ -3160,6 +3178,11 @@ void gfxPlatform::InitWebRenderConfig() {
 void gfxPlatform::InitWebGPUConfig() {
   FeatureState& feature = gfxConfig::GetFeature(Feature::WEBGPU);
   feature.SetDefaultFromPref("dom.webgpu.enabled", true, false);
+#ifndef NIGHTLY_BUILD
+  feature.ForceDisable(FeatureStatus::Blocked,
+                       "WebGPU can only be enabled in nightly",
+                       NS_LITERAL_CSTRING("WEBGPU_DISABLE_NON_NIGHTLY"));
+#endif
 }
 
 void gfxPlatform::InitOMTPConfig() {
@@ -3424,6 +3447,10 @@ void gfxPlatform::GetApzSupportInfo(mozilla::widget::InfoObject& aObj) {
   if (SupportsApzAutoscrolling()) {
     aObj.DefineProperty("ApzAutoscrollInput", 1);
   }
+
+  if (SupportsApzZooming()) {
+    aObj.DefineProperty("ApzZoomingInput", 1);
+  }
 }
 
 void gfxPlatform::GetTilesSupportInfo(mozilla::widget::InfoObject& aObj) {
@@ -3463,7 +3490,8 @@ void gfxPlatform::GetFrameStats(mozilla::widget::InfoObject& aObj) {
 }
 
 void gfxPlatform::GetCMSSupportInfo(mozilla::widget::InfoObject& aObj) {
-  nsTArray<uint8_t> outputProfileData = GetCMSOutputProfileData();
+  nsTArray<uint8_t> outputProfileData =
+      gfxPlatform::GetPlatform()->GetPlatformCMSOutputProfileData();
   if (outputProfileData.IsEmpty()) {
     nsPrintfCString msg("Empty profile data");
     aObj.DefineProperty("CMSOutputProfile", msg.get());
@@ -3696,6 +3724,10 @@ bool gfxPlatform::SupportsApzKeyboardInput() const {
 
 bool gfxPlatform::SupportsApzAutoscrolling() const {
   return StaticPrefs::apz_autoscroll_enabled();
+}
+
+bool gfxPlatform::SupportsApzZooming() const {
+  return StaticPrefs::apz_allow_zooming();
 }
 
 void gfxPlatform::InitOpenGLConfig() {

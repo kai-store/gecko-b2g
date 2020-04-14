@@ -141,6 +141,7 @@ EXPORTS.js += [
     '../public/Debug.h',
     '../public/Equality.h',
     '../public/ErrorReport.h',
+    '../public/Exception.h',
     '../public/ForOfIterator.h',
     '../public/GCAnnotations.h',
     '../public/GCAPI.h',
@@ -260,14 +261,6 @@ UNIFIED_SOURCES += [
     'ds/Bitmap.cpp',
     'ds/LifoAlloc.cpp',
     'ds/MemoryProtectionExceptionHandler.cpp',
-    'irregexp/NativeRegExpMacroAssembler.cpp',
-    'irregexp/RegExpAST.cpp',
-    'irregexp/RegExpCharacters.cpp',
-    'irregexp/RegExpEngine.cpp',
-    'irregexp/RegExpInterpreter.cpp',
-    'irregexp/RegExpMacroAssembler.cpp',
-    'irregexp/RegExpParser.cpp',
-    'irregexp/RegExpStack.cpp',
     'jsapi.cpp',
     'jsdate.cpp',
     'jsexn.cpp',
@@ -314,6 +307,7 @@ UNIFIED_SOURCES += [
     'vm/EqualityOperations.cpp',
     'vm/ErrorObject.cpp',
     'vm/ErrorReporting.cpp',
+    'vm/Exception.cpp',
     'vm/ForOfIterator.cpp',
     'vm/FrameIter.cpp',
     'vm/GeckoProfiler.cpp',
@@ -455,6 +449,18 @@ if CONFIG['MOZ_VTUNE']:
     if CONFIG['CC_TYPE'] == 'gcc':
         SOURCES['vtune/ittnotify_static.c'].flags += [
             '-Wno-stringop-overflow'
+        ]
+
+if not CONFIG['ENABLE_NEW_REGEXP']:
+    UNIFIED_SOURCES += [
+        'irregexp/NativeRegExpMacroAssembler.cpp',
+        'irregexp/RegExpAST.cpp',
+        'irregexp/RegExpCharacters.cpp',
+        'irregexp/RegExpEngine.cpp',
+        'irregexp/RegExpInterpreter.cpp',
+        'irregexp/RegExpMacroAssembler.cpp',
+        'irregexp/RegExpParser.cpp',
+        'irregexp/RegExpStack.cpp',
         ]
 
 DIRS += [

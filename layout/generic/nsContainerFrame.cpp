@@ -1983,9 +1983,10 @@ void nsOverflowContinuationTracker::EndFinish(nsIFrame* aChild) {
 
 #ifdef DEBUG_FRAME_DUMP
 void nsContainerFrame::List(FILE* out, const char* aPrefix,
-                            uint32_t aFlags) const {
+                            ListFlags aFlags) const {
   nsCString str;
   ListGeneric(str, aPrefix, aFlags);
+  ExtraContainerFrameInfo(str);
 
   // Output the children
   bool outputOneList = false;
@@ -2047,4 +2048,9 @@ void nsContainerFrame::ListWithMatchedRules(FILE* out,
     }
   }
 }
+
+void nsContainerFrame::ExtraContainerFrameInfo(nsACString& aTo) const {
+  (void)aTo;
+}
+
 #endif

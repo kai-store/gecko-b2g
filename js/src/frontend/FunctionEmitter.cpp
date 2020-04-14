@@ -34,7 +34,6 @@ FunctionEmitter::FunctionEmitter(BytecodeEmitter* bce, FunctionBox* funbox,
                                  IsHoisted isHoisted)
     : bce_(bce),
       funbox_(funbox),
-      fun_(bce_->cx, funbox_->function()),
       name_(bce_->cx, funbox_->explicitName()),
       syntaxKind_(syntaxKind),
       isHoisted_(isHoisted) {}
@@ -102,12 +101,13 @@ bool FunctionEmitter::emitLazy() {
     return false;
   }
 
+  bool isRunOnceLambda = bce_->emittingRunOnceLambda &&
+                         !funbox_->shouldSuppressRunOnce();
+
+  // Prepare to update the inner lazy script now that it's parent is fully
+  // compiled. These updates will be applied in FunctionBox::finish().
   funbox_->setEnclosingScopeForInnerLazyFunction(bce_->innermostScope());
-  if (bce_->emittingRunOnceLambda) {
-    // NOTE: The 'funbox' is only partially initialized so we defer checking
-    // the shouldSuppressRunOnce condition until delazification.
-    funbox_->setTreatAsRunOnce();
-  }
+  funbox_->setTreatAsRunOnce(isRunOnceLambda);
 
   if (!emitFunction()) {
     //              [stack] FUN?
@@ -192,7 +192,7 @@ bool FunctionEmitter::emitAsmJSModule() {
   MOZ_ASSERT(state_ == State::Start);
 
   MOZ_ASSERT(!funbox_->wasEmitted);
-  MOZ_ASSERT(IsAsmJSModule(fun_));
+  MOZ_ASSERT(funbox_->isAsmJSModule());
 
   //                [stack]
 

@@ -314,7 +314,7 @@ class nsTextFrame : public nsFrame {
 
 #ifdef DEBUG_FRAME_DUMP
   void List(FILE* out = stderr, const char* aPrefix = "",
-            uint32_t aFlags = 0) const final;
+            ListFlags aFlags = ListFlags()) const final;
   nsresult GetFrameName(nsAString& aResult) const final;
   void ToCString(nsCString& aBuf, int32_t* aTotalContentLength) const;
 #endif
@@ -490,7 +490,7 @@ class nsTextFrame : public nsFrame {
    * b. GetContentLength() == 0
    * c. it contains only non-significant white-space
    */
-  bool HasNonSuppressedText();
+  bool HasNonSuppressedText() const;
 
   /**
    * Object with various callbacks for PaintText() to invoke for different parts
@@ -697,11 +697,11 @@ class nsTextFrame : public nsFrame {
       const nsLineList::iterator* aLine = nullptr,
       uint32_t* aFlowEndInTextRun = nullptr);
 
-  gfxTextRun* GetTextRun(TextRunType aWhichTextRun) {
+  gfxTextRun* GetTextRun(TextRunType aWhichTextRun) const {
     if (aWhichTextRun == eInflated || !HasFontSizeInflation()) return mTextRun;
     return GetUninflatedTextRun();
   }
-  gfxTextRun* GetUninflatedTextRun();
+  gfxTextRun* GetUninflatedTextRun() const;
   void SetTextRun(gfxTextRun* aTextRun, TextRunType aWhichTextRun,
                   float aInflation);
   bool IsInTextRunUserData() const {

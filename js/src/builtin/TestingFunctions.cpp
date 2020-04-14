@@ -36,9 +36,11 @@
 #include "builtin/SelfHostingDefines.h"
 #ifdef DEBUG
 #  include "frontend/TokenStream.h"
-#  include "irregexp/RegExpAST.h"
-#  include "irregexp/RegExpEngine.h"
-#  include "irregexp/RegExpParser.h"
+#  ifndef ENABLE_NEW_REGEP
+#    include "irregexp/RegExpAST.h"
+#    include "irregexp/RegExpEngine.h"
+#    include "irregexp/RegExpParser.h"
+#  endif
 #endif
 #include "gc/Allocator.h"
 #include "gc/Zone.h"
@@ -2236,14 +2238,14 @@ bool RunIterativeFailureTest(JSContext* cx,
   for (unsigned thread = params.threadStart; thread <= params.threadEnd;
        thread++) {
     if (params.verbose) {
-      fprintf(stderr, "thread %d\n", thread);
+      fprintf(stderr, "thread %u\n", thread);
     }
 
     unsigned iteration = 1;
     bool failureWasSimulated;
     do {
       if (params.verbose) {
-        fprintf(stderr, "  iteration %d\n", iteration);
+        fprintf(stderr, "  iteration %u\n", iteration);
       }
 
       MOZ_ASSERT(!cx->isExceptionPending());
@@ -2307,7 +2309,7 @@ bool RunIterativeFailureTest(JSContext* cx,
     } while (failureWasSimulated);
 
     if (params.verbose) {
-      fprintf(stderr, "  finished after %d iterations\n", iteration - 1);
+      fprintf(stderr, "  finished after %u iterations\n", iteration - 1);
       if (!exception.isUndefined()) {
         RootedString str(cx, JS::ToString(cx, exception));
         if (!str) {
@@ -5019,7 +5021,7 @@ static bool GetModuleEnvironmentValue(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
-#ifdef DEBUG
+#if defined(DEBUG) && !defined(ENABLE_NEW_REGEXP)
 static const char* AssertionTypeToString(
     irregexp::RegExpAssertion::AssertionType type) {
   switch (type) {
@@ -5400,38 +5402,28 @@ static bool DisRegExp(JSContext* cx, unsigned argc, Value* vp) {
 
   Rooted<RegExpObject*> reobj(cx, &args[0].toObject().as<RegExpObject>());
 
-  bool match_only = false;
-  if (!args.get(1).isUndefined()) {
-    if (!args.get(1).isBoolean()) {
-      ReportUsageErrorASCII(cx, callee,
-                            "Second argument, if present, must be a Boolean");
-      return false;
-    }
-    match_only = args[1].toBoolean();
-  }
-
   RootedLinearString input(cx, cx->runtime()->emptyString);
-  if (!args.get(2).isUndefined()) {
-    if (!args.get(2).isString()) {
+  if (!args.get(1).isUndefined()) {
+    if (!args.get(1).isString()) {
       ReportUsageErrorASCII(cx, callee,
-                            "Third argument, if present, must be a String");
+                            "Second argument, if present, must be a String");
       return false;
     }
-    RootedString inputStr(cx, args[2].toString());
+    RootedString inputStr(cx, args[1].toString());
     input = inputStr->ensureLinear(cx);
     if (!input) {
       return false;
     }
   }
 
-  if (!RegExpObject::dumpBytecode(cx, reobj, match_only, input)) {
+  if (!RegExpObject::dumpBytecode(cx, reobj, input)) {
     return false;
   }
 
   args.rval().setUndefined();
   return true;
 }
-#endif  // DEBUG
+#endif  // DEBUG && !ENABLE_NEW_REGEXP
 
 static bool GetTimeZone(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -7153,13 +7145,13 @@ gc::ZealModeHelpText),
 
 // clang-format off
 static const JSFunctionSpecWithHelp FuzzingUnsafeTestingFunctions[] = {
-#ifdef DEBUG
+#if defined(DEBUG) && !defined(ENABLE_NEW_REGEXP)
     JS_FN_HELP("parseRegExp", ParseRegExp, 3, 0,
 "parseRegExp(pattern[, flags[, match_only])",
 "  Parses a RegExp pattern and returns a tree, potentially throwing."),
 
     JS_FN_HELP("disRegExp", DisRegExp, 3, 0,
-"disRegExp(regexp[, match_only[, input]])",
+"disRegExp(regexp[, input])",
 "  Dumps RegExp bytecode."),
 #endif
 

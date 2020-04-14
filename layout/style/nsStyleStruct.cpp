@@ -37,6 +37,7 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/GeckoBindings.h"
 #include "mozilla/PreferenceSheet.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/StaticPresData.h"
 #include "mozilla/Likely.h"
 #include "nsIURI.h"
@@ -44,6 +45,7 @@
 #include "mozilla/dom/DocumentInlines.h"
 #include <algorithm>
 #include "ImageLoader.h"
+#include "mozilla/StaticPrefs_layout.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -206,7 +208,7 @@ void Gecko_LoadData_Drop(StyleLoadData* aData) {
       task->Run();
     } else {
       // if Resolve was not called at some point, mDocGroup is not set.
-      SystemGroup::Dispatch(TaskCategory::Other, task.forget());
+      SchedulerGroup::Dispatch(TaskCategory::Other, task.forget());
     }
   }
 
@@ -2699,7 +2701,10 @@ nsChangeHint nsStyleDisplay::CalcDifference(
 //
 
 nsStyleVisibility::nsStyleVisibility(const Document& aDocument)
-    : mImageOrientation(StyleImageOrientation::FromImage),
+    : mImageOrientation(
+          StaticPrefs::layout_css_image_orientation_initial_from_image()
+              ? StyleImageOrientation::FromImage
+              : StyleImageOrientation::None),
       mDirection(aDocument.GetBidiOptions() == IBMBIDI_TEXTDIRECTION_RTL
                      ? StyleDirection::Rtl
                      : StyleDirection::Ltr),

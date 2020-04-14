@@ -255,13 +255,6 @@ pref("dom.indexedDB.logging.profiler-marks", false);
 // Whether or not File Handle is enabled.
 pref("dom.fileHandle.enabled", true);
 
-// Whether or not selection events on text controls are enabled
-#ifdef NIGHTLY_BUILD
-  pref("dom.select_events.textcontrols.enabled", true);
-#else
-  pref("dom.select_events.textcontrols.enabled", false);
-#endif
-
 // The number of workers per domain allowed to run concurrently.
 // We're going for effectively infinite, while preventing abuse.
 pref("dom.workers.maxPerDomain", 512);
@@ -424,9 +417,8 @@ pref("media.decoder-doctor.new-issue-endpoint", "https://webcompat.com/issues/ne
 
 pref("media.videocontrols.picture-in-picture.enabled", false);
 pref("media.videocontrols.picture-in-picture.video-toggle.enabled", false);
-pref("media.videocontrols.picture-in-picture.video-toggle.flyout-enabled", false);
-pref("media.videocontrols.picture-in-picture.video-toggle.flyout-wait-ms", 5000);
 pref("media.videocontrols.picture-in-picture.video-toggle.always-show", false);
+pref("media.videocontrols.picture-in-picture.video-toggle.min-video-secs", 45);
 
 #ifdef MOZ_WEBRTC
   pref("media.navigator.video.enabled", true);
@@ -919,12 +911,6 @@ pref("nglayout.enable_drag_images", true);
 pref("nglayout.debug.paint_flashing", false);
 pref("nglayout.debug.paint_flashing_chrome", false);
 
-// Whether frame visibility tracking is enabled globally.
-pref("layout.framevisibility.enabled", true);
-
-pref("layout.framevisibility.numscrollportwidths", 0);
-pref("layout.framevisibility.numscrollportheights", 1);
-
 // URI fixup prefs
 pref("browser.fixup.alternate.enabled", true);
 pref("browser.fixup.alternate.prefix", "www.");
@@ -999,7 +985,6 @@ pref("editor.resizing.preserve_ratio",       true);
 pref("editor.positioning.offset",            0);
 
 // Scripts & Windows prefs
-pref("dom.disable_beforeunload",            false);
 pref("dom.beforeunload_timeout_ms",         1000);
 pref("dom.disable_window_flip",             false);
 pref("dom.disable_window_move_resize",      false);
@@ -1015,8 +1000,6 @@ pref("dom.disable_window_open_feature.minimizable", false);
 pref("dom.disable_window_open_feature.status",      true);
 
 pref("dom.allow_scripts_to_close_windows",          false);
-
-pref("dom.require_user_interaction_for_beforeunload", true);
 
 pref("dom.popup_allowed_events", "change click dblclick auxclick mouseup pointerup notificationclick reset submit touchend contextmenu");
 
@@ -1495,9 +1478,14 @@ pref("network.http.spdy.websockets", true);
 pref("network.http.spdy.enable-hpack-dump", false);
 
 // Http3 parameters
-pref("network.http.http3.enabled", false);
+#ifdef NIGHTLY_BUILD
+  pref("network.http.http3.enabled", true);
+#else
+  pref("network.http.http3.enabled", false);
+#endif
+
 // Http3 qpack table size.
-pref("network.http.http3.default-qpack-table-size", 65536); // 64k
+pref("network.http.http3.default-qpack-table-size", 0);
 // Maximal number of streams that can be blocked on waiting for qpack
 // instructions.
 pref("network.http.http3.default-max-stream-blocked", 10);
@@ -1572,7 +1560,11 @@ pref("network.http.send_window_size", 1024);
 // per Section 4.7 "Low-Latency Data Service Class".
 pref("network.ftp.data.qos", 0);
 pref("network.ftp.control.qos", 0);
-pref("network.ftp.enabled", true);
+#ifdef NIGHTLY_BUILD
+  pref("network.ftp.enabled", false);
+#else
+  pref("network.ftp.enabled", true);
+#endif
 
 // The max time to spend on xpcom events between two polls in ms.
 pref("network.sts.max_time_for_events_between_two_polls", 100);
@@ -2391,8 +2383,6 @@ pref("services.blocklist.gfx.signer", "remote-settings.content-signature.mozilla
 pref("ui.key.accelKey", 17);
 pref("ui.key.menuAccessKey", 18);
 
-pref("ui.key.menuAccessKeyFocuses", false); // overridden below
-
 // Middle-mouse handling
 pref("middlemouse.paste", false);
 pref("middlemouse.contentLoadURL", false);
@@ -2463,10 +2453,6 @@ pref("mousewheel.with_shift.delta_multiplier_z", 100);
 pref("mousewheel.with_win.delta_multiplier_x", 100);
 pref("mousewheel.with_win.delta_multiplier_y", 100);
 pref("mousewheel.with_win.delta_multiplier_z", 100);
-
-// If line-height is lower than this value (in device pixels), 1 line scroll
-// scrolls this height.
-pref("mousewheel.min_line_scroll_amount", 5);
 
 // Auto-dir is a feature which treats any single-wheel scroll as a scroll in the
 // only one scrollable direction if the target has only one scrollable
@@ -2578,9 +2564,6 @@ pref("layout.css.dpi", -1);
 // 2 = right
 // 3 = left
 pref("layout.scrollbar.side", 0);
-
-// pref to stop overlay scrollbars from fading out, for testing purposes
-pref("layout.testing.overlay-scrollbars.always-visible", false);
 
 // pref to control whether layout warnings that are hit quite often are enabled
 pref("layout.spammy_warnings.enabled", false);
@@ -2750,13 +2733,8 @@ pref("browser.tabs.remote.dataUriInDefaultWebProcess", false);
 // sorts of pages, which we have to do when we run them in the normal web
 // content process, causes compatibility issues.
 //
-// This is going away and for now is disabled on nightly because document
-// channel is enabled there.
-#ifdef NIGHTLY_BUILD
+// This is going away and for now is disabled.
 pref("browser.tabs.remote.allowLinkedWebInFileUriProcess", false);
-#else
-pref("browser.tabs.remote.allowLinkedWebInFileUriProcess", true);
-#endif
 
 // This pref will cause assertions when a remoteType triggers a process switch
 // to a new remoteType it should not be able to trigger.
@@ -3139,8 +3117,6 @@ pref("ui.mouse.radius.inputSource.touchOnly", true);
   // The maximum size at which we will force GDI classic mode using
   // force_gdi_classic_for_families.
   pref("gfx.font_rendering.cleartype_params.force_gdi_classic_max_size", 15);
-
-  pref("ui.key.menuAccessKeyFocuses", true);
 
   // override double-click word selection behavior.
   pref("layout.word_select.eat_space_to_next_word", true);
@@ -3952,7 +3928,7 @@ pref("signon.schemeUpgrades",                     true);
 pref("signon.includeOtherSubdomainsInLookup",     true);
 // This temporarily prevents the master password to reprompt for autocomplete.
 pref("signon.masterPasswordReprompt.timeout_ms", 900000); // 15 Minutes
-pref("signon.showAutoCompleteFooter",             true);
+pref("signon.showAutoCompleteFooter",             false);
 pref("signon.showAutoCompleteOrigins",            true);
 
 // Satchel (Form Manager) prefs

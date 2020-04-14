@@ -244,7 +244,6 @@
 #include "mozilla/BloomFilter.h"
 #include "BrowserChild.h"
 #include "mozilla/dom/DocGroup.h"
-#include "mozilla/dom/TabGroup.h"
 #include "nsIWebNavigationInfo.h"
 #include "nsPluginHost.h"
 #include "nsIBrowser.h"
@@ -6503,6 +6502,19 @@ Maybe<bool> nsContentUtils::IsPatternMatching(nsAString& aValue,
   // regexp evaluation, not actual script execution.
   JSAutoRealm ar(cx, xpc::UnprivilegedJunkScope());
 
+  // Check if the pattern by itself is valid first, and not that it only becomes
+  // valid once we add ^(?: and )$.
+  {
+    JS::Rooted<JSObject*> testRe(
+        cx, JS::NewUCRegExpObject(
+                cx, static_cast<char16_t*>(aPattern.BeginWriting()),
+                aPattern.Length(), JS::RegExpFlag::Unicode));
+    if (!testRe) {
+      ReportPatternCompileFailure(aPattern, aDocument, cx);
+      return Some(true);
+    }
+  }
+
   // The pattern has to match the entire value.
   aPattern.InsertLiteral(u"^(?:", 0);
   aPattern.AppendLiteral(")$");
@@ -6511,13 +6523,8 @@ Maybe<bool> nsContentUtils::IsPatternMatching(nsAString& aValue,
       cx,
       JS::NewUCRegExpObject(cx, static_cast<char16_t*>(aPattern.BeginWriting()),
                             aPattern.Length(), JS::RegExpFlag::Unicode));
-  if (!re) {
-    // Remove extra patterns added above to report with the original pattern.
-    aPattern.Cut(0, 4);
-    aPattern.Cut(aPattern.Length() - 2, 2);
-    ReportPatternCompileFailure(aPattern, aDocument, cx);
-    return Some(true);
-  }
+  // We checked that the pattern is valid above.
+  MOZ_ASSERT(re, "Adding ^(?: and )$ shouldn't make a valid regexp invalid");
 
   JS::Rooted<JS::Value> rval(cx, JS::NullValue());
   size_t idx = 0;
@@ -8356,7 +8363,8 @@ class StringBuilder {
       return false;
     }
 
-    for (StringBuilder* current = this; current; current = current->mNext) {
+    for (StringBuilder* current = this; current;
+         current = current->mNext.get()) {
       uint32_t len = current->mUnits.Length();
       for (uint32_t i = 0; i < len; ++i) {
         Unit& u = current->mUnits[i];
@@ -8412,7 +8420,7 @@ class StringBuilder {
 
   explicit StringBuilder(StringBuilder* aFirst) : mLast(nullptr), mLength(0) {
     MOZ_COUNT_CTOR(StringBuilder);
-    aFirst->mLast->mNext = this;
+    aFirst->mLast->mNext = WrapUnique(this);
     aFirst->mLast = this;
   }
 
@@ -8483,7 +8491,7 @@ class StringBuilder {
   }
 
   AutoTArray<Unit, STRING_BUFFER_UNITS> mUnits;
-  nsAutoPtr<StringBuilder> mNext;
+  mozilla::UniquePtr<StringBuilder> mNext;
   StringBuilder* mLast;
   // mLength is used only in the first StringBuilder object in the linked list.
   CheckedInt<uint32_t> mLength;
@@ -9187,8 +9195,7 @@ nsresult nsContentUtils::NewXULOrHTMLElement(
      * For the unset case which is non-synchronous only applied for
      * inner/outerHTML.
      */
-    bool synchronousCustomElements = aFromParser != dom::FROM_PARSER_FRAGMENT ||
-                                     aFromParser == dom::NOT_FROM_PARSER;
+    bool synchronousCustomElements = aFromParser != dom::FROM_PARSER_FRAGMENT;
     // Per discussion in https://github.com/w3c/webcomponents/issues/635,
     // use entry global in those places that are called from JS APIs and use the
     // node document's global object if it is called from parser.
@@ -9881,21 +9888,7 @@ already_AddRefed<nsISerialEventTarget> nsContentUtils::GetEventTargetByLoadInfo(
       target = group->EventTargetFor(aCategory);
     }
   } else {
-    // There's no document yet, but this might be a top-level load where we can
-    // find a TabGroup.
-    uint64_t outerWindowId;
-    if (NS_FAILED(aLoadInfo->GetOuterWindowID(&outerWindowId))) {
-      // No window. This might be an add-on XHR, a service worker request, or
-      // something else.
-      return nullptr;
-    }
-    RefPtr<nsGlobalWindowOuter> window =
-        nsGlobalWindowOuter::GetOuterWindowWithId(outerWindowId);
-    if (!window) {
-      return nullptr;
-    }
-
-    target = window->TabGroup()->EventTargetFor(aCategory);
+    target = GetMainThreadSerialEventTarget();
   }
 
   return target.forget();

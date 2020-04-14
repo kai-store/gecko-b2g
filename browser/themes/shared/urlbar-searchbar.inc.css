@@ -39,8 +39,7 @@
   color: -moz-FieldText;
 }
 
-#urlbar:not(.megabar),
-#urlbar.megabar > #urlbar-background,
+#urlbar-background,
 #searchbar {
   background-color: -moz-Field;
   background-clip: padding-box;
@@ -66,15 +65,13 @@
   padding: 0;
 }
 
-#urlbar:not(.megabar):not([focused="true"]):hover,
-#urlbar.megabar:not([focused="true"]):hover > #urlbar-background,
+#urlbar:not([focused="true"]):hover > #urlbar-background,
 #searchbar:not(:focus-within):hover {
   border-color: @fieldHoverBorderColor@;
   box-shadow: 0 1px 6px rgba(0,0,0,.1);
 }
 
-#urlbar:not(.megabar)[focused="true"],
-#urlbar.megabar[focused="true"] > #urlbar-background,
+#urlbar[focused="true"] > #urlbar-background,
 #searchbar:focus-within {
   border-color: var(--toolbar-field-focus-border-color);
 }
@@ -84,26 +81,22 @@
   color: var(--lwt-toolbar-field-color, black);
 }
 
-#urlbar:not(.megabar):-moz-lwtheme,
-#urlbar.megabar:-moz-lwtheme > #urlbar-background,
+#urlbar:-moz-lwtheme > #urlbar-background,
 #navigator-toolbox #searchbar:-moz-lwtheme {
   background-color: var(--lwt-toolbar-field-background-color, hsla(0,0%,100%,.8));
 }
 
-#urlbar:not(.megabar):not([focused="true"]):-moz-lwtheme,
-#urlbar.megabar:not([focused="true"]):-moz-lwtheme > #urlbar-background,
+#urlbar:not([focused="true"]):-moz-lwtheme > #urlbar-background,
 #navigator-toolbox #searchbar:not(:focus-within):-moz-lwtheme {
   border-color: var(--lwt-toolbar-field-border-color, @fieldBorderColor@);
 }
 
-#urlbar:not(.megabar):not([focused="true"]):-moz-lwtheme:hover,
-#urlbar.megabar:not([focused="true"]):-moz-lwtheme:hover > #urlbar-background,
+#urlbar:not([focused="true"]):-moz-lwtheme:hover > #urlbar-background,
 #navigator-toolbox #searchbar:not(:focus-within):-moz-lwtheme:hover {
   border-color: var(--lwt-toolbar-field-border-color, @fieldHoverBorderColor@);
 }
 
-#urlbar:not(.megabar):-moz-lwtheme:hover,
-#urlbar.megabar:-moz-lwtheme:hover > #urlbar-background,
+#urlbar:-moz-lwtheme:hover > #urlbar-background,
 #navigator-toolbox #searchbar:-moz-lwtheme:hover {
   background-color: var(--lwt-toolbar-field-background-color, white);
 }
@@ -113,8 +106,7 @@
   color: var(--lwt-toolbar-field-focus-color);
 }
 
-#urlbar:not(.megabar)[focused="true"]:-moz-lwtheme,
-#urlbar.megabar[focused="true"]:-moz-lwtheme > #urlbar-background,
+#urlbar[focused="true"]:-moz-lwtheme > #urlbar-background,
 #navigator-toolbox #searchbar:focus-within:-moz-lwtheme {
   background-color: var(--lwt-toolbar-field-focus);
 }
@@ -149,13 +141,13 @@
  * the bounds of the urlbar.
  */
 
-#urlbar.megabar,
-#urlbar.megabar > #urlbar-input-container,
-#urlbar.megabar > .urlbarView {
+#urlbar,
+#urlbar-input-container,
+.urlbarView {
   position: relative;
 }
 
-#urlbar.megabar > #urlbar-background {
+#urlbar-background {
   display: block;
   position: absolute;
   inset: 0;
@@ -166,7 +158,7 @@
   inset-inline-start: @urlbarSearchButtonWidth@;
 }
 
-#urlbar.megabar > #urlbar-input-container {
+#urlbar-input-container {
   /* Match urlbar-background's border. */
   border: 1px solid transparent;
 }
@@ -191,7 +183,7 @@
 }
 
 #urlbar:not([open]) > .urlbarView,
-#urlbar.megabar:not([breakout]) > .urlbarView {
+#urlbar:not([breakout]) > .urlbarView {
   display: none;
 }
 
@@ -434,14 +426,12 @@
   /* Show the separator between the page actions and other elements when at
      least one of the latter is shown. */
   visibility: visible;
-  margin-left: 6px;
-  margin-right: 6px;
+  margin-inline: 6px;
 }
 
 #userContext-icons,
 #urlbar-zoom-button {
-  margin-left: 6px;
-  margin-right: 6px;
+  margin-inline: 6px;
 }
 
 .urlbar-icon {
@@ -495,19 +485,6 @@
 #urlbar-go-button:-moz-locale-dir(rtl),
 .search-go-button:-moz-locale-dir(rtl) {
   transform: scaleX(-1);
-}
-
-.urlbar-history-dropmarker {
-  list-style-image: url(chrome://global/skin/icons/arrow-dropdown-16.svg);
-  transition: opacity 0.15s ease;
-}
-
-#urlbar[switchingtabs] > #urlbar-input-container > .urlbar-history-dropmarker {
-  transition: none;
-}
-
-#nav-bar:not([customizing="true"]) > #nav-bar-customization-target > #urlbar-container:not(:hover) > #urlbar:not([focused]) > #urlbar-input-container > .urlbar-history-dropmarker {
-  opacity: 0;
 }
 
 #pageActionButton,
@@ -793,17 +770,6 @@
   mask-position-x: 0;
 }
 
-/* Translate the dropmarker to give illusion of increasing width of the recommendation  */
-#urlbar[cfr-recommendation-state] .urlbar-history-dropmarker {
-  transition: transform ease-in-out var(--cfr-animation-duration);
-}
-#urlbar[cfr-recommendation-state="expanded"] .urlbar-history-dropmarker {
-  transform: translateX(calc(var(--cfr-label-width) * -1));
-}
-#urlbar[cfr-recommendation-state="expanded"] .urlbar-history-dropmarker:-moz-locale-dir(rtl) {
-  transform: translateX(calc(var(--cfr-label-width)));
-}
-
 /* Shift the url-bar text fading to stop the recommendation overlapping */
 #urlbar[cfr-recommendation-state] #urlbar-input {
   /* A mask-image is usually only defined for the url bar when text overflows.
@@ -908,8 +874,7 @@
   list-style-image: url(chrome://browser/skin/search-glass.svg);
   -moz-context-properties: fill, fill-opacity;
   pointer-events: none;
-  margin-inline-start: 8px;
-  margin-inline-end: 6px;
+  margin-inline: 8px 6px;
   width: 16px;
   fill-opacity: .4;
 }
@@ -928,28 +893,24 @@
 
 .searchbar-search-button[addengines=true] > .searchbar-search-icon-overlay {
   list-style-image: url(chrome://browser/skin/search-indicator-badge-add.svg);
-  margin-inline-start: -15px;
-  margin-inline-end: 4px;
+  margin-inline: -15px 4px;
   margin-top: -10px;
   width: 11px;
   height: 11px;
 }
 
 .searchbar-search-button[addengines=true] > .searchbar-search-icon-overlay:-moz-locale-dir(rtl) {
-  margin-inline-start: -25px;
-  margin-inline-end: 14px;
+  margin-inline: -25px 14px;
 }
 
 .searchbar-search-button:hover:not([addengines=true]) > .searchbar-search-icon-overlay {
   list-style-image: url(chrome://global/skin/icons/arrow-dropdown-12.svg);
   -moz-context-properties: fill;
-  margin-inline-start: -8px;
-  margin-inline-end: 2px;
+  margin-inline: -8px 2px;
   width: 6px;
   height: 6px;
 }
 
 .searchbar-search-button:hover:not([addengines=true]) > .searchbar-search-icon-overlay:-moz-locale-dir(rtl) {
-  margin-inline-start: -26px;
-  margin-inline-end: 20px;
+  margin-inline: -26px 20px;
 }

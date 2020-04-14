@@ -261,7 +261,7 @@ BigInt* BigInt::neg(JSContext* cx, HandleBigInt x) {
   if (!result) {
     return nullptr;
   }
-  result->toggleFlagBit(SignBit);
+  result->header_.toggleFlagBit(SignBit);
   return result;
 }
 
@@ -1788,7 +1788,7 @@ BigInt* BigInt::createFromInt64(JSContext* cx, int64_t n) {
   }
 
   if (n < 0) {
-    res->setFlagBit(SignBit);
+    res->header_.setFlagBit(SignBit);
   }
   MOZ_ASSERT(res->isNegative() == (n < 0));
 
@@ -3546,7 +3546,8 @@ static inline BigInt* ParseStringBigIntLiteral(JSContext* cx,
       start++;
       return BigInt::parseLiteralDigits(cx, Range<const CharT>(start, end), 10,
                                         isNegative, haveParseError);
-    } else if (start[0] == '-') {
+    }
+    if (start[0] == '-') {
       bool isNegative = true;
       start++;
       return BigInt::parseLiteralDigits(cx, Range<const CharT>(start, end), 10,

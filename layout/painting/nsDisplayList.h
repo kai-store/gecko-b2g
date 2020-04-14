@@ -49,6 +49,7 @@
 #include "nsAutoLayoutPhase.h"
 #include "nsDisplayItemTypes.h"
 #include "RetainedDisplayListHelpers.h"
+#include "Units.h"
 
 #include <stdint.h>
 #include "nsTHashtable.h"
@@ -77,6 +78,7 @@ class TransformReferenceBox;
 namespace mozilla {
 class FrameLayerBuilder;
 class PresShell;
+class StickyScrollContainer;
 namespace layers {
 struct FrameMetrics;
 class RenderRootStateManager;
@@ -810,7 +812,7 @@ class nsDisplayListBuilder {
    * aPointerEventsNoneDoc should be set to true if the frame generating this
    * document is pointer-events:none.
    */
-  void EnterPresShell(nsIFrame* aReferenceFrame,
+  void EnterPresShell(const nsIFrame* aReferenceFrame,
                       bool aPointerEventsNoneDoc = false);
   /**
    * For print-preview documents, we sometimes need to build display items for
@@ -819,11 +821,11 @@ class nsDisplayListBuilder {
    * ResetMarkedFramesForDisplayList to make sure that the results of
    * MarkFramesForDisplayList do not carry over between batches.
    */
-  void ResetMarkedFramesForDisplayList(nsIFrame* aReferenceFrame);
+  void ResetMarkedFramesForDisplayList(const nsIFrame* aReferenceFrame);
   /**
    * Notify the display list builder that we're leaving a presshell.
    */
-  void LeavePresShell(nsIFrame* aReferenceFrame,
+  void LeavePresShell(const nsIFrame* aReferenceFrame,
                       nsDisplayList* aPaintedContents);
 
   void IncrementPresShellPaintCount(mozilla::PresShell* aPresShell);
@@ -926,17 +928,6 @@ class nsDisplayListBuilder {
   void SubtractFromVisibleRegion(nsRegion* aVisibleRegion,
                                  const nsRegion& aRegion);
 
-  void ExpandRenderRootRect(LayoutDeviceRect aRect,
-                            mozilla::wr::RenderRoot aRenderRoot) {
-    mRenderRootRects[aRenderRoot] = mRenderRootRects[aRenderRoot].Union(aRect);
-  }
-
-  void ComputeDefaultRenderRootRect(LayoutDeviceIntSize aClientSize);
-
-  LayoutDeviceRect GetRenderRootRect(mozilla::wr::RenderRoot aRenderRoot) {
-    return mRenderRootRects[aRenderRoot];
-  }
-
   /**
    * Mark the frames in aFrames to be displayed if they intersect aDirtyRect
    * (which is relative to aDirtyFrame). If the frames have placeholders
@@ -947,8 +938,9 @@ class nsDisplayListBuilder {
    */
   void MarkFramesForDisplayList(nsIFrame* aDirtyFrame,
                                 const nsFrameList& aFrames);
-  void MarkFrameForDisplay(nsIFrame* aFrame, nsIFrame* aStopAtFrame);
-  void MarkFrameForDisplayIfVisible(nsIFrame* aFrame, nsIFrame* aStopAtFrame);
+  void MarkFrameForDisplay(nsIFrame* aFrame, const nsIFrame* aStopAtFrame);
+  void MarkFrameForDisplayIfVisible(nsIFrame* aFrame,
+                                    const nsIFrame* aStopAtFrame);
   void AddFrameMarkedForDisplayIfVisible(nsIFrame* aFrame);
 
   void ClearFixedBackgroundDisplayData();
@@ -1916,8 +1908,6 @@ class nsDisplayListBuilder {
   const nsIFrame* mCurrentReferenceFrame;
   // The offset from mCurrentFrame to mCurrentReferenceFrame.
   nsPoint mCurrentOffsetToReferenceFrame;
-
-  mozilla::wr::RenderRootArray<LayoutDeviceRect> mRenderRootRects;
 
   RefPtr<AnimatedGeometryRoot> mRootAGR;
   RefPtr<AnimatedGeometryRoot> mCurrentAGR;
@@ -6098,9 +6088,11 @@ class nsDisplayOwnLayer : public nsDisplayWrapList {
   nsDisplayOwnLayerFlags GetFlags() { return mFlags; }
   bool IsScrollThumbLayer() const;
   bool IsScrollbarContainer() const;
-  bool IsRootScrollbarContainerWithDynamicToolbar() const;
+  bool IsRootScrollbarContainer() const;
   bool IsZoomingLayer() const;
   bool IsFixedPositionLayer() const;
+  bool IsStickyPositionLayer() const;
+  bool HasDynamicToolbar() const;
 
  protected:
   nsDisplayOwnLayerFlags mFlags;
@@ -6205,11 +6197,13 @@ class nsDisplayStickyPosition : public nsDisplayOwnLayer {
   nsDisplayStickyPosition(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                           nsDisplayList* aList,
                           const ActiveScrolledRoot* aActiveScrolledRoot,
-                          const ActiveScrolledRoot* aContainerASR);
+                          const ActiveScrolledRoot* aContainerASR,
+                          bool aClippedToDisplayPort);
   nsDisplayStickyPosition(nsDisplayListBuilder* aBuilder,
                           const nsDisplayStickyPosition& aOther)
       : nsDisplayOwnLayer(aBuilder, aOther),
-        mContainerASR(aOther.mContainerASR) {
+        mContainerASR(aOther.mContainerASR),
+        mClippedToDisplayPort(aOther.mClippedToDisplayPort) {
     MOZ_COUNT_CTOR(nsDisplayStickyPosition);
   }
 
@@ -6217,6 +6211,7 @@ class nsDisplayStickyPosition : public nsDisplayOwnLayer {
 
   void SetClipChain(const DisplayItemClipChain* aClipChain,
                     bool aStore) override;
+  bool IsClippedToDisplayPort() const { return mClippedToDisplayPort; }
 
   already_AddRefed<Layer> BuildLayer(
       nsDisplayListBuilder* aBuilder, LayerManager* aManager,
@@ -6235,15 +6230,38 @@ class nsDisplayStickyPosition : public nsDisplayOwnLayer {
       mozilla::layers::RenderRootStateManager* aManager,
       nsDisplayListBuilder* aDisplayListBuilder) override;
 
+  bool UpdateScrollData(
+      mozilla::layers::WebRenderScrollData* aData,
+      mozilla::layers::WebRenderLayerScrollData* aLayerData) override;
+
   const ActiveScrolledRoot* GetContainerASR() const { return mContainerASR; }
 
  private:
   NS_DISPLAY_ALLOW_CLONING()
 
+  void CalculateLayerScrollRanges(
+      mozilla::StickyScrollContainer* aStickyScrollContainer,
+      float aAppUnitsPerDevPixel, float aScaleX, float aScaleY,
+      mozilla::LayerRectAbsolute& aStickyOuter,
+      mozilla::LayerRectAbsolute& aStickyInner);
+
+  mozilla::StickyScrollContainer* GetStickyScrollContainer();
+
   // This stores the ASR that this sticky container item would have assuming it
   // has no fixed descendants. This may be the same as the ASR returned by
   // GetActiveScrolledRoot(), or it may be a descendant of that.
   RefPtr<const ActiveScrolledRoot> mContainerASR;
+  // This flag tracks if this sticky item is just clipped to the enclosing
+  // scrollframe's displayport, or if there are additional clips in play. In
+  // the former case, we can skip setting the displayport clip as the scrolled-
+  // clip of the corresponding layer. This allows sticky items to remain
+  // unclipped when the enclosing scrollframe is scrolled past the displayport.
+  // i.e. when the rest of the scrollframe checkerboards, the sticky item will
+  // not. This makes sense to do because the sticky item has abnormal scrolling
+  // behavior and may still be visible even if the rest of the scrollframe is
+  // checkerboarded. Note that the sticky item will still be subject to the
+  // scrollport clip.
+  bool mClippedToDisplayPort;
 };
 
 class nsDisplayFixedPosition : public nsDisplayOwnLayer {

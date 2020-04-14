@@ -9,7 +9,7 @@
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 #include "jit/MIRGraph.h"
-#include "jit/WarpOracle.h"
+#include "jit/WarpSnapshot.h"
 #include "vm/Opcodes.h"
 
 #include "jit/JitScript-inl.h"
@@ -26,7 +26,8 @@ WarpBuilder::WarpBuilder(WarpSnapshot& snapshot, MIRGenerator& mirGen)
       alloc_(mirGen.alloc()),
       info_(mirGen.outerInfo()),
       script_(snapshot.script()->script()),
-      loopStack_(alloc_) {
+      loopStack_(alloc_),
+      iterators_(alloc_) {
   opSnapshotIter_ = snapshot.script()->opSnapshots().getFirst();
 }
 
@@ -306,6 +307,10 @@ bool WarpBuilder::build() {
     return false;
   }
 
+  if (!MPhi::markIteratorPhis(iterators_)) {
+    return false;
+  }
+
   MOZ_ASSERT(loopStack_.empty());
   MOZ_ASSERT(loopDepth_ == 0);
 
@@ -386,29 +391,34 @@ MInstruction* WarpBuilder::buildCallObject(MDefinition* callee,
 bool WarpBuilder::buildEnvironmentChain() {
   const WarpEnvironment& env = snapshot_.script()->environment();
 
-  MInstruction* envDef = nullptr;
-  switch (env.kind()) {
-    case WarpEnvironment::Kind::None:
-      // Leave the slot |undefined|, nothing to do.
-      return true;
-    case WarpEnvironment::Kind::ConstantObject:
-      envDef = constant(ObjectValue(*env.constantObject()));
-      break;
-    case WarpEnvironment::Kind::Function: {
-      MDefinition* callee = getCallee();
-      envDef = MFunctionEnvironment::New(alloc(), callee);
-      current->add(envDef);
-      if (LexicalEnvironmentObject* obj = env.maybeNamedLambdaTemplate()) {
-        envDef = buildNamedLambdaEnv(callee, envDef, obj);
-      }
-      if (CallObject* obj = env.maybeCallObjectTemplate()) {
-        envDef = buildCallObject(callee, envDef, obj);
-        if (!envDef) {
-          return false;
+  if (env.is<NoEnvironment>()) {
+    return true;
+  }
+
+  MInstruction* envDef = env.match(
+      [](const NoEnvironment&) -> MInstruction* {
+        MOZ_CRASH("Already handled");
+      },
+      [this](JSObject* obj) -> MInstruction* {
+        return constant(ObjectValue(*obj));
+      },
+      [this](const FunctionEnvironment& env) -> MInstruction* {
+        MDefinition* callee = getCallee();
+        MInstruction* envDef = MFunctionEnvironment::New(alloc(), callee);
+        current->add(envDef);
+        if (LexicalEnvironmentObject* obj = env.namedLambdaTemplate) {
+          envDef = buildNamedLambdaEnv(callee, envDef, obj);
         }
-      }
-      break;
-    }
+        if (CallObject* obj = env.callObjectTemplate) {
+          envDef = buildCallObject(callee, envDef, obj);
+          if (!envDef) {
+            return nullptr;
+          }
+        }
+        return envDef;
+      });
+  if (!envDef) {
+    return false;
   }
 
   // Update the environment slot from UndefinedValue only after the initial
@@ -820,13 +830,9 @@ bool WarpBuilder::build_ToNumeric(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::build_Pos(BytecodeLocation loc) {
-  // TODO: MToNumber is the most basic implementation. Optimize it for known
+  // TODO: MUnaryCache is the most basic implementation. Optimize it for known
   // numbers at least.
-  MDefinition* value = current->pop();
-  MToNumber* ins = MToNumber::New(alloc(), value);
-  current->add(ins);
-  current->push(ins);
-  return resumeAfter(ins, loc);
+  return buildUnaryOp(loc);
 }
 
 bool WarpBuilder::buildUnaryOp(BytecodeLocation loc) {
@@ -1071,6 +1077,65 @@ bool WarpBuilder::build_JumpTarget(BytecodeLocation loc) {
   return true;
 }
 
+bool WarpBuilder::addIteratorLoopPhis(BytecodeLocation loopHead) {
+  // When unwinding the stack for a thrown exception, the exception handler must
+  // close live iterators. For ForIn and Destructuring loops, the exception
+  // handler needs access to values on the stack. To prevent them from being
+  // optimized away (and replaced with the JS_OPTIMIZED_OUT MagicValue), we need
+  // to mark the phis (and phis they flow into) as having implicit uses.
+  // See ProcessTryNotes in vm/Interpreter.cpp and CloseLiveIteratorIon in
+  // jit/JitFrames.cpp
+
+  MOZ_ASSERT(current->stackDepth() >= info().firstStackSlot());
+
+  bool emptyStack = current->stackDepth() == info().firstStackSlot();
+  if (emptyStack) {
+    return true;
+  }
+
+  jsbytecode* loopHeadPC = loopHead.toRawBytecode();
+
+  for (TryNoteIterAllNoGC tni(script_, loopHeadPC); !tni.done(); ++tni) {
+    const TryNote& tn = **tni;
+
+    // Stop if we reach an outer loop because outer loops were already
+    // processed when we visited their loop headers.
+    if (tn.isLoop()) {
+      BytecodeLocation tnStart = script_->offsetToLocation(tn.start);
+      if (tnStart != loopHead) {
+        MOZ_ASSERT(tnStart.is(JSOp::LoopHead));
+        MOZ_ASSERT(tnStart < loopHead);
+        return true;
+      }
+    }
+
+    switch (tn.kind()) {
+      case TryNoteKind::Destructuring:
+      case TryNoteKind::ForIn: {
+        // For for-in loops we add the iterator object to iterators_. For
+        // destructuring loops we add the "done" value that's on top of the
+        // stack and used in the exception handler.
+        MOZ_ASSERT(tn.stackDepth >= 1);
+        uint32_t slot = info().stackSlot(tn.stackDepth - 1);
+        MPhi* phi = current->getSlot(slot)->toPhi();
+        if (!iterators_.append(phi)) {
+          return false;
+        }
+        break;
+      }
+      case TryNoteKind::Loop:
+      case TryNoteKind::ForOf:
+        // Regular loops do not have iterators to close. ForOf loops handle
+        // unwinding using catch blocks.
+        break;
+      default:
+        break;
+    }
+  }
+
+  return true;
+}
+
 bool WarpBuilder::build_LoopHead(BytecodeLocation loc) {
   // All loops have the following bytecode structure:
   //
@@ -1099,7 +1164,9 @@ bool WarpBuilder::build_LoopHead(BytecodeLocation loc) {
 
   pred->end(MGoto::New(alloc(), current));
 
-  // TODO: handle destructuring special case (IonBuilder::newPendingLoopHeader)
+  if (!addIteratorLoopPhis(loc)) {
+    return false;
+  }
 
   MInterruptCheck* check = MInterruptCheck::New(alloc());
   current->add(check);
@@ -2096,6 +2163,8 @@ bool WarpBuilder::build_NewArray(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::build_NewArrayCopyOnWrite(BytecodeLocation loc) {
+  MOZ_CRASH("Bug 1626854: COW arrays disabled without TI for now");
+
   ArrayObject* templateObject = &loc.getObject(script_)->as<ArrayObject>();
 
   // TODO: pre-tenuring.
@@ -2410,7 +2479,7 @@ bool WarpBuilder::build_InitElemInc(BytecodeLocation loc) {
 
   // Push index + 1.
   MConstant* constOne = constant(Int32Value(1));
-  MAdd* nextIndex = MAdd::New(alloc(), index, constOne, MIRType::Int32);
+  MAdd* nextIndex = MAdd::New(alloc(), index, constOne, MDefinition::Truncate);
   current->add(nextIndex);
   current->push(nextIndex);
 

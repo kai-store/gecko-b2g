@@ -583,8 +583,8 @@ class MozbuildObject(ProcessExecutionMixin):
                                   'Mozilla Build System', '-group', 'mozbuild',
                                   '-message', msg], ensure_exit_code=False)
             elif sys.platform.startswith('win'):
-                from ctypes import Structure, windll, POINTER, sizeof
-                from ctypes.wintypes import DWORD, HANDLE, WINFUNCTYPE, BOOL, UINT
+                from ctypes import Structure, windll, POINTER, sizeof, WINFUNCTYPE
+                from ctypes.wintypes import DWORD, HANDLE, BOOL, UINT
 
                 class FLASHWINDOW(Structure):
                     _fields_ = [("cbSize", UINT),
@@ -1024,6 +1024,15 @@ class MachCommandConditions(object):
         """Must not be an artifact build."""
         if hasattr(cls, 'substs'):
             return not MachCommandConditions.is_artifact_build(cls)
+        return False
+
+    @staticmethod
+    def is_buildapp_in(cls, apps):
+        """Must have a build for one of the given app"""
+        for app in apps:
+            attr = getattr(MachCommandConditions, 'is_{}'.format(app), None)
+            if attr and attr(cls):
+                return True
         return False
 
 

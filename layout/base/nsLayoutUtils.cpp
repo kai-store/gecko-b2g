@@ -3141,7 +3141,8 @@ struct AutoNestedPaintCount {
 #endif
 
 nsIFrame* nsLayoutUtils::GetFrameForPoint(
-    nsIFrame* aFrame, nsPoint aPt, EnumSet<FrameForPointOption> aOptions) {
+    const nsIFrame* aFrame, nsPoint aPt,
+    EnumSet<FrameForPointOption> aOptions) {
   AUTO_PROFILER_LABEL("nsLayoutUtils::GetFrameForPoint", LAYOUT);
 
   nsresult rv;
@@ -3152,11 +3153,13 @@ nsIFrame* nsLayoutUtils::GetFrameForPoint(
 }
 
 nsresult nsLayoutUtils::GetFramesForArea(
-    nsIFrame* aFrame, const nsRect& aRect, nsTArray<nsIFrame*>& aOutFrames,
-    EnumSet<FrameForPointOption> aOptions) {
+    const nsIFrame* aFrame, const nsRect& aRect,
+    nsTArray<nsIFrame*>& aOutFrames, EnumSet<FrameForPointOption> aOptions) {
   AUTO_PROFILER_LABEL("nsLayoutUtils::GetFramesForArea", LAYOUT);
 
-  nsDisplayListBuilder builder(aFrame, nsDisplayListBuilderMode::EventDelivery,
+  nsIFrame* frame = const_cast<nsIFrame*>(aFrame);
+
+  nsDisplayListBuilder builder(frame, nsDisplayListBuilderMode::EventDelivery,
                                false);
   builder.BeginFrame();
   nsDisplayList list;
@@ -3177,13 +3180,13 @@ nsresult nsLayoutUtils::GetFramesForArea(
   builder.SetHitTestIsForVisibility(
       aOptions.contains(FrameForPointOption::OnlyVisible));
 
-  builder.EnterPresShell(aFrame);
+  builder.EnterPresShell(frame);
 
   builder.SetVisibleRect(aRect);
   builder.SetDirtyRect(aRect);
 
-  aFrame->BuildDisplayListForStackingContext(&builder, &list);
-  builder.LeavePresShell(aFrame, nullptr);
+  frame->BuildDisplayListForStackingContext(&builder, &list);
+  builder.LeavePresShell(frame, nullptr);
 
 #ifdef MOZ_DUMP_PAINTING
   if (gDumpEventList) {
@@ -4733,6 +4736,7 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetFontMetricsForComputedStyle(
   // pass along to CreateFontGroup
   params.userFontSet = aPresContext->GetUserFontSet();
   params.textPerf = aPresContext->GetTextPerfMetrics();
+  params.fontStats = aPresContext->GetFontMatchingStats();
   params.featureValueLookup = aPresContext->GetFontFeatureValuesLookup();
 
   // When aInflation is 1.0 and we don't require width variant, avoid
@@ -10058,6 +10062,7 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
   params.userFontSet =
       aUseUserFontSet ? aPresContext->GetUserFontSet() : nullptr;
   params.textPerf = aPresContext->GetTextPerfMetrics();
+  params.fontStats = aPresContext->GetFontMatchingStats();
   params.featureValueLookup = aPresContext->GetFontFeatureValuesLookup();
   return aPresContext->DeviceContext()->GetMetricsFor(font, params);
 }

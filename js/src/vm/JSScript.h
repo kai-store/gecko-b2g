@@ -85,21 +85,6 @@ class ModuleSharedContext;
 class ScriptStencil;
 }  // namespace frontend
 
-namespace detail {
-
-// Do not call this directly! It is exposed for the friend declarations in
-// this file.
-JSScript* CopyScript(JSContext* cx, HandleScript src,
-                     HandleObject functionOrGlobal,
-                     HandleScriptSourceObject sourceObject,
-                     MutableHandle<GCVector<Scope*>> scopes);
-
-}  // namespace detail
-
-}  // namespace js
-
-namespace js {
-
 class ScriptCounts {
  public:
   typedef mozilla::Vector<PCCounts, 0, SystemAllocPolicy> PCCountsVector;
@@ -1737,7 +1722,8 @@ class BaseScript : public gc::TenuredCell {
   // Pointer to baseline->method()->raw(), ion->method()->raw(), a wasm jit
   // entry, the JIT's EnterInterpreter stub, or the lazy link stub. Must be
   // non-null (except on no-jit builds).
-  uint8_t* jitCodeRaw_ = nullptr;
+  using HeaderWithCodePtr = gc::CellHeaderWithNonGCPointer<uint8_t>;
+  HeaderWithCodePtr headerAndJitCodeRaw_;
 
   // Object that determines what Realm this script is compiled for. For function
   // scripts this is the canonical function, otherwise it is the GlobalObject of
@@ -1785,7 +1771,7 @@ class BaseScript : public gc::TenuredCell {
   BaseScript(uint8_t* stubEntry, JSObject* functionOrGlobal,
              ScriptSourceObject* sourceObject, SourceExtent extent,
              uint32_t immutableFlags)
-      : jitCodeRaw_(stubEntry),
+      : headerAndJitCodeRaw_(stubEntry),
         functionOrGlobal_(functionOrGlobal),
         sourceObject_(sourceObject),
         extent_(extent),
@@ -1796,7 +1782,14 @@ class BaseScript : public gc::TenuredCell {
     MOZ_ASSERT(extent_.sourceEnd <= extent_.toStringEnd);
   }
 
+  void setJitCodeRaw(uint8_t* code) { headerAndJitCodeRaw_.setPtr(code); }
+
  public:
+  static BaseScript* New(JSContext* cx, js::HandleObject functionOrGlobal,
+                         js::HandleScriptSourceObject sourceObject,
+                         const js::SourceExtent& extent,
+                         uint32_t immutableFlags);
+
   // Create a lazy BaseScript without initializing any gc-things.
   static BaseScript* CreateRawLazy(JSContext* cx, uint32_t ngcthings,
                                    HandleFunction fun,
@@ -1813,7 +1806,7 @@ class BaseScript : public gc::TenuredCell {
       const Vector<frontend::FunctionIndex>& innerFunctionIndexes,
       const SourceExtent& extent, uint32_t immutableFlags);
 
-  uint8_t* jitCodeRaw() const { return jitCodeRaw_; }
+  uint8_t* jitCodeRaw() const { return headerAndJitCodeRaw_.ptr(); }
   bool isUsingInterpreterTrampoline(JSRuntime* rt) const;
 
   // Canonical function for the script, if it has a function. For top-level
@@ -1939,45 +1932,39 @@ setterLevel:                                                                  \
   IMMUTABLE_FLAG_GETTER(noScriptRval, NoScriptRval)
   IMMUTABLE_FLAG_GETTER(selfHosted, SelfHosted)
   IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(treatAsRunOnce, TreatAsRunOnce)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(forceStrict, ForceStrict)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(strict, Strict)
-  IMMUTABLE_FLAG_GETTER(hasNonSyntacticScope, HasNonSyntacticScope)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(bindingsAccessedDynamically,
-                                      BindingsAccessedDynamically)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(funHasExtensibleScope,
-                                      FunHasExtensibleScope)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(hasCallSiteObj, HasCallSiteObj)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(hasModuleGoal, HasModuleGoal)
+  IMMUTABLE_FLAG_GETTER(forceStrict, ForceStrict)
+  IMMUTABLE_FLAG_GETTER(strict, Strict)
+  IMMUTABLE_FLAG_GETTER(bindingsAccessedDynamically,
+                        BindingsAccessedDynamically)
+  IMMUTABLE_FLAG_GETTER(funHasExtensibleScope, FunHasExtensibleScope)
+  IMMUTABLE_FLAG_GETTER(hasCallSiteObj, HasCallSiteObj)
+  IMMUTABLE_FLAG_GETTER(hasModuleGoal, HasModuleGoal)
   IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(functionHasThisBinding,
                                       FunctionHasThisBinding)
-  // FunctionHasExtraBodyVarScope: custom logic below.
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(hasMappedArgsObj, HasMappedArgsObj)
+  IMMUTABLE_FLAG_GETTER(hasMappedArgsObj, HasMappedArgsObj)
   IMMUTABLE_FLAG_GETTER(hasInnerFunctions, HasInnerFunctions)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(needsHomeObject, NeedsHomeObject)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(isDerivedClassConstructor,
-                                      IsDerivedClassConstructor)
+  IMMUTABLE_FLAG_GETTER(needsHomeObject, NeedsHomeObject)
+  IMMUTABLE_FLAG_GETTER(isDerivedClassConstructor, IsDerivedClassConstructor)
   IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(isLikelyConstructorWrapper,
                                       IsLikelyConstructorWrapper)
   IMMUTABLE_FLAG_GETTER(isGenerator, IsGenerator)
   IMMUTABLE_FLAG_GETTER(isAsync, IsAsync)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(hasRest, HasRest)
-  // See FunctionBox::argumentsHasLocalBinding_ comment.
-  // N.B.: no setter -- custom logic in JSScript.
+  IMMUTABLE_FLAG_GETTER(hasRest, HasRest)
   IMMUTABLE_FLAG_GETTER(argumentsHasVarBinding, ArgumentsHasVarBinding)
+  IMMUTABLE_FLAG_GETTER(alwaysNeedsArgsObj, AlwaysNeedsArgsObj)
+  IMMUTABLE_FLAG_GETTER(shouldDeclareArguments, ShouldDeclareArguments)
   IMMUTABLE_FLAG_GETTER(isForEval, IsForEval)
   IMMUTABLE_FLAG_GETTER(isModule, IsModule)
+  IMMUTABLE_FLAG_GETTER(isFunction, IsFunction)
+  IMMUTABLE_FLAG_GETTER(hasDirectEval, HasDirectEval)
+  IMMUTABLE_FLAG_GETTER(hasNonSyntacticScope, HasNonSyntacticScope)
+  // FunctionHasExtraBodyVarScope: custom logic below.
   IMMUTABLE_FLAG_GETTER(needsFunctionEnvironmentObjects,
                         NeedsFunctionEnvironmentObjects)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(shouldDeclareArguments,
-                                      ShouldDeclareArguments)
-  IMMUTABLE_FLAG_GETTER(isFunction, IsFunction)
-  IMMUTABLE_FLAG_GETTER_SETTER_PUBLIC(hasDirectEval, HasDirectEval)
 
   MUTABLE_FLAG_GETTER_SETTER(hasRunOnce, HasRunOnce)
   MUTABLE_FLAG_GETTER_SETTER(hasBeenCloned, HasBeenCloned)
   MUTABLE_FLAG_GETTER_SETTER(hasScriptCounts, HasScriptCounts)
-  // Access the flag for whether this script has a DebugScript in its realm's
-  // map. This should only be used by the DebugScript class.
   MUTABLE_FLAG_GETTER_SETTER(hasDebugScript, HasDebugScript)
   MUTABLE_FLAG_GETTER_SETTER(allowRelazify, AllowRelazify)
   MUTABLE_FLAG_GETTER_SETTER(failedBoundsCheck, FailedBoundsCheck)
@@ -2028,8 +2015,6 @@ setterLevel:                                                                  \
     return hasModuleGoal() ? frontend::ParseGoal::Module
                            : frontend::ParseGoal::Script;
   }
-
-  void setArgumentsHasVarBinding();
 
   bool hasEnclosingScript() const { return warmUpData_.isEnclosingScript(); }
   BaseScript* enclosingScript() const {
@@ -2093,6 +2078,10 @@ setterLevel:                                                                  \
   }
 
   RuntimeScriptData* sharedData() const { return sharedData_; }
+  void initSharedData(RuntimeScriptData* data) {
+    MOZ_ASSERT(sharedData_ == nullptr);
+    sharedData_ = data;
+  }
   void freeSharedData() { sharedData_ = nullptr; }
 
   // NOTE: Script only has bytecode if JSScript::fullyInitFromStencil completes
@@ -2108,6 +2097,7 @@ setterLevel:                                                                  \
 
  public:
   static const JS::TraceKind TraceKind = JS::TraceKind::Script;
+  const gc::CellHeader& cellHeader() const { return headerAndJitCodeRaw_; }
 
   void traceChildren(JSTracer* trc);
   void finalize(JSFreeOp* fop);
@@ -2126,7 +2116,8 @@ setterLevel:                                                                  \
 
   // JIT accessors
   static constexpr size_t offsetOfJitCodeRaw() {
-    return offsetof(BaseScript, jitCodeRaw_);
+    return offsetof(BaseScript, headerAndJitCodeRaw_) +
+           HeaderWithCodePtr::offsetOfPtr();
   }
   static constexpr size_t offsetOfPrivateData() {
     return offsetof(BaseScript, data_);
@@ -2213,28 +2204,14 @@ class JSScript : public js::BaseScript {
       JSContext* cx, js::HandleScript script,
       const js::frontend::ScriptStencil& stencil);
 
-  friend JSScript* js::detail::CopyScript(
-      JSContext* cx, js::HandleScript src, js::HandleObject functionOrGlobal,
-      js::HandleScriptSourceObject sourceObject,
-      js::MutableHandle<JS::GCVector<js::Scope*>> scopes);
-
  private:
   using js::BaseScript::BaseScript;
 
-  static JSScript* New(JSContext* cx, js::HandleObject functionOrGlobal,
-                       js::HandleScriptSourceObject sourceObject,
-                       const js::SourceExtent& extent, uint32_t immutableFlags);
-
  public:
   static JSScript* Create(JSContext* cx, js::HandleObject functionOrGlobal,
-                          const JS::ReadOnlyCompileOptions& options,
                           js::HandleScriptSourceObject sourceObject,
-                          const js::SourceExtent& extent);
-
-  static JSScript* Create(JSContext* cx, js::HandleObject functionOrGlobal,
-                          js::HandleScriptSourceObject sourceObject,
-                          js::ImmutableScriptFlags flags,
-                          js::SourceExtent extent);
+                          js::SourceExtent extent,
+                          js::ImmutableScriptFlags flags);
 
   // NOTE: This should only be used while delazifying.
   static JSScript* CastFromLazy(js::BaseScript* lazy) {
@@ -2396,21 +2373,18 @@ class JSScript : public js::BaseScript {
   }
 
   /*
-   * As an optimization, even when argsHasLocalBinding, the function prologue
-   * may not need to create an arguments object. This is determined by
+   * As an optimization, even when argumentsHasVarBinding, the function
+   * prologue may not need to create an arguments object. This is determined by
    * needsArgsObj which is set by AnalyzeArgumentsUsage. When !needsArgsObj,
    * the prologue may simply write MagicValue(JS_OPTIMIZED_ARGUMENTS) to
-   * 'arguments's slot and any uses of 'arguments' will be guaranteed to
-   * handle this magic value. To avoid spurious arguments object creation, we
-   * maintain the invariant that needsArgsObj is only called after the script
-   * has been analyzed.
+   * 'arguments's slot and any uses of 'arguments' will be guaranteed to handle
+   * this magic value. To avoid spurious arguments object creation, we maintain
+   * the invariant that needsArgsObj is only called after the script has been
+   * analyzed.
    */
-  bool analyzedArgsUsage() const {
-    return !hasFlag(MutableFlags::NeedsArgsAnalysis);
-  }
   inline bool ensureHasAnalyzedArgsUsage(JSContext* cx);
   bool needsArgsObj() const {
-    MOZ_ASSERT(analyzedArgsUsage());
+    MOZ_ASSERT(!needsArgsAnalysis());
     return hasFlag(MutableFlags::NeedsArgsObj);
   }
   void setNeedsArgsObj(bool needsArgsObj);

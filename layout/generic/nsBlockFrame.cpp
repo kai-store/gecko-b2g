@@ -489,7 +489,8 @@ NS_QUERYFRAME_HEAD(nsBlockFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 #ifdef DEBUG_FRAME_DUMP
-void nsBlockFrame::List(FILE* out, const char* aPrefix, uint32_t aFlags) const {
+void nsBlockFrame::List(FILE* out, const char* aPrefix,
+                        ListFlags aFlags) const {
   nsCString str;
   ListGeneric(str, aPrefix, aFlags);
 
@@ -6985,10 +6986,10 @@ void nsBlockFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   // backplates behind text. When backplating we consider consecutive
   // runs of text as a whole, which requires we iterate through all lines
   // to find our backplate size.
-  nsLineBox* cursor = (hasDescendantPlaceHolders || textOverflow.isSome() ||
-                       backplateColor)
-                          ? nullptr
-                          : GetFirstLineContaining(aBuilder->GetDirtyRect().y);
+  nsLineBox* cursor =
+      (hasDescendantPlaceHolders || textOverflow.isSome() || backplateColor)
+          ? nullptr
+          : GetFirstLineContaining(aBuilder->GetDirtyRect().y);
   LineIterator line_end = LinesEnd();
 
   TextOverflow* textOverflowPtr = textOverflow.ptrOr(nullptr);

@@ -49,6 +49,7 @@
 #include "js/CharacterEncoding.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/Date.h"
+#include "js/Exception.h"
 #include "js/Modules.h"  // JS::GetModulePrivate
 #include "js/PropertySpec.h"
 #include "js/SourceText.h"  // JS::SourceText
@@ -2052,16 +2053,6 @@ static bool intrinsic_ToBigInt(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
-static bool intrinsic_ToNumeric(JSContext* cx, unsigned argc, Value* vp) {
-  CallArgs args = CallArgsFromVp(argc, vp);
-  MOZ_ASSERT(args.length() == 1);
-  if (!ToNumeric(cx, args[0])) {
-    return false;
-  }
-  args.rval().set(args[0]);
-  return true;
-}
-
 // The self-hosting global isn't initialized with the normal set of builtins.
 // Instead, individual C++-implemented functions that're required by
 // self-hosted code are defined as global functions. Accessing these
@@ -2509,7 +2500,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("PromiseResolve", intrinsic_PromiseResolve, 2, 0),
 
     JS_FN("ToBigInt", intrinsic_ToBigInt, 1, 0),
-    JS_FN("ToNumeric", intrinsic_ToNumeric, 1, 0),
 
     JS_FS_END};
 
@@ -2595,15 +2585,14 @@ static void MaybePrintAndClearPendingException(JSContext* cx, FILE* file) {
 
   AutoClearPendingException acpe(cx);
 
-  RootedValue exn(cx);
-  if (!cx->getPendingException(&exn)) {
+  JS::ExceptionStack exnStack(cx);
+  if (!JS::StealPendingExceptionStack(cx, &exnStack)) {
     fprintf(file, "error getting pending exception\n");
     return;
   }
-  cx->clearPendingException();
 
   ErrorReport report(cx);
-  if (!report.init(cx, exn, js::ErrorReport::WithSideEffects)) {
+  if (!report.init(cx, exnStack, js::ErrorReport::WithSideEffects)) {
     fprintf(file, "out of memory initializing ErrorReport\n");
     return;
   }

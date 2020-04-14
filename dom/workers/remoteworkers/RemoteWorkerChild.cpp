@@ -25,6 +25,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ErrorResult.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/Services.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Unused.h"
@@ -189,10 +190,8 @@ class ReleaseWorkerRunnable final : public WorkerRunnable {
 
     mWeakRef = nullptr;
 
-    nsCOMPtr<nsIEventTarget> target =
-        SystemGroup::EventTargetFor(TaskCategory::Other);
-    NS_ProxyRelease("ReleaseWorkerRunnable::mWorkerPrivate", target,
-                    mWorkerPrivate.forget());
+    NS_ReleaseOnMainThread("ReleaseWorkerRunnable::mWorkerPrivate",
+                           mWorkerPrivate.forget());
   }
 
   RefPtr<WorkerPrivate> mWorkerPrivate;
@@ -300,7 +299,8 @@ void RemoteWorkerChild::ExecWorker(const RemoteWorkerData& aData) {
         }
       });
 
-  MOZ_ALWAYS_SUCCEEDS(SystemGroup::Dispatch(TaskCategory::Other, r.forget()));
+  MOZ_ALWAYS_SUCCEEDS(
+      SchedulerGroup::Dispatch(TaskCategory::Other, r.forget()));
 }
 
 nsresult RemoteWorkerChild::ExecWorkerOnMainThread(RemoteWorkerData&& aData) {
@@ -335,8 +335,9 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(RemoteWorkerData&& aData) {
   info.mBaseURI = DeserializeURI(aData.baseScriptURL());
   info.mResolvedScriptURI = DeserializeURI(aData.resolvedScriptURL());
 
-  info.mPrincipalInfo = new PrincipalInfo(aData.principalInfo());
-  info.mStoragePrincipalInfo = new PrincipalInfo(aData.storagePrincipalInfo());
+  info.mPrincipalInfo = MakeUnique<PrincipalInfo>(aData.principalInfo());
+  info.mStoragePrincipalInfo =
+      MakeUnique<PrincipalInfo>(aData.storagePrincipalInfo());
 
   info.mReferrerInfo = aData.referrerInfo();
   info.mDomain = aData.domain();
@@ -371,8 +372,8 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(RemoteWorkerData&& aData) {
     Maybe<mozilla::ipc::CSPInfo> cspInfo = clientInfo.ref().GetCspInfo();
     if (cspInfo.isSome()) {
       info.mCSP = CSPInfoToCSP(cspInfo.ref(), nullptr);
-      info.mCSPInfo = new CSPInfo();
-      rv = CSPToCSPInfo(info.mCSP, info.mCSPInfo);
+      info.mCSPInfo = MakeUnique<CSPInfo>();
+      rv = CSPToCSPInfo(info.mCSP, info.mCSPInfo.get());
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
@@ -697,10 +698,8 @@ RemoteWorkerChild::WorkerPrivateAccessibleState::
     return;
   }
 
-  nsCOMPtr<nsIEventTarget> target =
-      SystemGroup::EventTargetFor(TaskCategory::Other);
-  NS_ProxyRelease(
-      "RemoteWorkerChild::WorkerPrivateAccessibleState::mWorkerPrivate", target,
+  NS_ReleaseOnMainThread(
+      "RemoteWorkerChild::WorkerPrivateAccessibleState::mWorkerPrivate",
       mWorkerPrivate.forget());
 }
 
@@ -725,8 +724,8 @@ RemoteWorkerChild::Running::~Running() {
   if (NS_IsMainThread()) {
     dispatchWorkerRunnableRunnable->Run();
   } else {
-    SystemGroup::Dispatch(TaskCategory::Other,
-                          dispatchWorkerRunnableRunnable.forget());
+    SchedulerGroup::Dispatch(TaskCategory::Other,
+                             dispatchWorkerRunnableRunnable.forget());
   }
 }
 
@@ -861,7 +860,8 @@ class RemoteWorkerChild::SharedWorkerOp : public RemoteWorkerChild::Op {
           self->Exec(owner);
         });
 
-    MOZ_ALWAYS_SUCCEEDS(SystemGroup::Dispatch(TaskCategory::Other, r.forget()));
+    MOZ_ALWAYS_SUCCEEDS(
+        SchedulerGroup::Dispatch(TaskCategory::Other, r.forget()));
 
 #ifdef DEBUG
     mStarted = true;

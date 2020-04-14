@@ -6,10 +6,12 @@
 
 #include "base/task.h"
 #include "GeckoProfiler.h"
+#include "GLContext.h"
 #include "RenderThread.h"
 #include "nsThreadUtils.h"
 #include "mtransport/runnable_utils.h"
 #include "mozilla/layers/AsyncImagePipelineManager.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUParent.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
@@ -30,6 +32,14 @@
 #ifdef MOZ_WIDGET_ANDROID
 #  include "GLLibraryEGL.h"
 #  include "GeneratedJNIWrappers.h"
+#endif
+
+#ifdef MOZ_WIDGET_GTK
+#  include <gdk/gdkx.h>
+#endif
+
+#ifdef MOZ_WAYLAND
+#  include "GLLibraryEGL.h"
 #endif
 
 using namespace mozilla;
@@ -323,7 +333,6 @@ void RenderThread::HandleFrameOneDoc(wr::WindowId aWindowId, bool aRender) {
 
   bool render = false;
   PendingFrameInfo frame;
-  bool hadSlowFrame;
   {  // scope lock
     auto windows = mWindowInfos.Lock();
     auto it = windows->find(AsUint64(aWindowId));
@@ -344,7 +353,6 @@ void RenderThread::HandleFrameOneDoc(wr::WindowId aWindowId, bool aRender) {
     render = frameInfo.mFrameNeedsRender;
 
     frame = frameInfo;
-    hadSlowFrame = info->mHadSlowFrame;
   }
 
   // It is for ensuring that PrepareForUse() is called before
@@ -354,7 +362,7 @@ void RenderThread::HandleFrameOneDoc(wr::WindowId aWindowId, bool aRender) {
   UpdateAndRender(aWindowId, frame.mStartId, frame.mStartTime, render,
                   /* aReadbackSize */ Nothing(),
                   /* aReadbackFormat */ Nothing(),
-                  /* aReadbackBuffer */ Nothing(), hadSlowFrame);
+                  /* aReadbackBuffer */ Nothing());
 
   {  // scope lock
     auto windows = mWindowInfos.Lock();
@@ -453,7 +461,7 @@ void RenderThread::UpdateAndRender(
     const TimeStamp& aStartTime, bool aRender,
     const Maybe<gfx::IntSize>& aReadbackSize,
     const Maybe<wr::ImageFormat>& aReadbackFormat,
-    const Maybe<Range<uint8_t>>& aReadbackBuffer, bool aHadSlowFrame) {
+    const Maybe<Range<uint8_t>>& aReadbackBuffer) {
   AUTO_PROFILER_TRACING_MARKER("Paint", "Composite", GRAPHICS);
   MOZ_ASSERT(IsInRenderThread());
   MOZ_ASSERT(aRender || aReadbackBuffer.isNothing());
@@ -475,8 +483,8 @@ void RenderThread::UpdateAndRender(
   wr::RenderedFrameId latestFrameId;
   RendererStats stats = {0};
   if (aRender) {
-    latestFrameId = renderer->UpdateAndRender(
-        aReadbackSize, aReadbackFormat, aReadbackBuffer, aHadSlowFrame, &stats);
+    latestFrameId = renderer->UpdateAndRender(aReadbackSize, aReadbackFormat,
+                                              aReadbackBuffer, &stats);
   } else {
     renderer->Update();
   }
@@ -618,17 +626,6 @@ void RenderThread::DecPendingFrameBuildCount(wr::WindowId aWindowId) {
   WindowInfo* info = it->second;
   MOZ_RELEASE_ASSERT(info->mPendingFrameBuild >= 1);
   info->mPendingFrameBuild--;
-}
-
-void RenderThread::NotifySlowFrame(wr::WindowId aWindowId) {
-  auto windows = mWindowInfos.Lock();
-  auto it = windows->find(AsUint64(aWindowId));
-  if (it == windows->end()) {
-    MOZ_ASSERT(false);
-    return;
-  }
-  WindowInfo* info = it->second;
-  info->mHadSlowFrame = true;
 }
 
 void RenderThread::RegisterExternalImage(
@@ -899,11 +896,11 @@ WebRenderProgramCache::WebRenderProgramCache(wr::WrThreadPool* aThreadPool) {
   MOZ_ASSERT(aThreadPool);
 
   nsAutoString path;
-  if (gfxVars::UseWebRenderProgramBinaryDisk()) {
+  if (gfx::gfxVars::UseWebRenderProgramBinaryDisk()) {
     path.Append(gfx::gfxVars::ProfDirectory());
   }
   mProgramCache = wr_program_cache_new(&path, aThreadPool);
-  if (gfxVars::UseWebRenderProgramBinaryDisk()) {
+  if (gfx::gfxVars::UseWebRenderProgramBinaryDisk()) {
     wr_try_load_startup_shaders_from_disk(mProgramCache);
   }
 }

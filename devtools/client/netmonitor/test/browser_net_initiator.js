@@ -40,7 +40,7 @@ const EXPECTED_REQUESTS = [
     causeType: "xhr",
     causeUri: INITIATOR_URL,
     stack: [
-      { fn: "performXhrRequestCallback", file: INITIATOR_FILE_NAME, line: 26 },
+      { fn: "performXhrRequestCallback", file: INITIATOR_FILE_NAME, line: 28 },
     ],
   },
   {
@@ -48,7 +48,7 @@ const EXPECTED_REQUESTS = [
     url: EXAMPLE_URL + "fetch_request",
     causeType: "fetch",
     causeUri: INITIATOR_URL,
-    stack: [{ fn: "performFetchRequest", file: INITIATOR_FILE_NAME, line: 31 }],
+    stack: [{ fn: "performFetchRequest", file: INITIATOR_FILE_NAME, line: 33 }],
   },
   {
     method: "GET",
@@ -59,12 +59,12 @@ const EXPECTED_REQUESTS = [
       {
         fn: "performPromiseFetchRequestCallback",
         file: INITIATOR_FILE_NAME,
-        line: 37,
+        line: 39,
       },
       {
         fn: "performPromiseFetchRequest",
         file: INITIATOR_FILE_NAME,
-        line: 36,
+        line: 38,
         asyncCause: "promise callback",
       },
     ],
@@ -78,15 +78,22 @@ const EXPECTED_REQUESTS = [
       {
         fn: "performTimeoutFetchRequestCallback2",
         file: INITIATOR_FILE_NAME,
-        line: 44,
+        line: 46,
       },
       {
         fn: "performTimeoutFetchRequestCallback1",
         file: INITIATOR_FILE_NAME,
-        line: 43,
+        line: 45,
         asyncCause: "setTimeout handler",
       },
     ],
+  },
+  {
+    method: "GET",
+    url: EXAMPLE_URL + "lazy_img_request",
+    causeType: "lazy-img",
+    causeUri: INITIATOR_URL,
+    stack: false,
   },
   {
     method: "POST",
@@ -94,7 +101,7 @@ const EXPECTED_REQUESTS = [
     causeType: "beacon",
     causeUri: INITIATOR_URL,
     stack: [
-      { fn: "performBeaconRequest", file: INITIATOR_FILE_NAME, line: 50 },
+      { fn: "performBeaconRequest", file: INITIATOR_FILE_NAME, line: 60 },
     ],
   },
 ];
@@ -135,9 +142,9 @@ add_task(async function() {
 
     EventUtils.sendMouseEvent(
       { type: "mousedown" },
-      document.querySelectorAll(".request-list-item .requests-list-initiator")[
-        index
-      ]
+      document.querySelectorAll(
+        ".request-list-item .requests-list-initiator-lastframe"
+      )[index]
     );
 
     // Clicking on the initiator column should open the Stack Trace panel
@@ -160,25 +167,83 @@ add_task(async function() {
     { type: "click" },
     document.querySelector("#requests-list-initiator-button")
   );
-  const expectedOrder = EXPECTED_REQUESTS.map(r => {
-    if (r.stack) {
-      const { file, line } = r.stack[0];
-      return getUrlBaseName(file) + ":" + line;
+
+  const expectedOrder = EXPECTED_REQUESTS.sort(initiatorSortPredicate).map(
+    r => {
+      const lastFrameExists = !!r.stack;
+      let initiator = "";
+      let lineNumber = "";
+      if (lastFrameExists) {
+        const { filename, line: _lineNumber } = r.stack[0];
+        initiator = getUrlBaseName(filename);
+        lineNumber = ":" + _lineNumber;
+      }
+      const causeStr = lastFrameExists ? " (" + r.causeType + ")" : r.causeType;
+      return initiator + lineNumber + causeStr;
     }
-    return "";
-  }).sort();
+  );
+
   expectedOrder.forEach((expectedInitiator, i) => {
     const request = getSortedRequests(store.getState())[i];
+    let initiator;
     if (request.cause.stacktraceAvailable) {
       const { fileName, lineNumber } = request.cause.lastFrame;
-      const initiator = getUrlBaseName(fileName) + ":" + lineNumber;
-      is(
-        initiator,
-        expectedInitiator,
-        `The request #${i} has the expected initiator after sorting`
-      );
+      initiator =
+        getUrlBaseName(fileName) +
+        ":" +
+        lineNumber +
+        " (" +
+        request.cause.type +
+        ")";
+    } else {
+      initiator = request.cause.type;
     }
+    is(
+      initiator,
+      expectedInitiator,
+      `The request #${i} has the expected initiator after sorting`
+    );
   });
 
   await teardown(monitor);
 });
+
+// derived from devtools/client/netmonitor/src/utils/sort-predicates.js
+function initiatorSortPredicate(first, second) {
+  const firstLastFrame = first.stack ? first.stack[0] : null;
+  const secondLastFrame = second.stack ? second.stack[0] : null;
+
+  let firstInitiator = "";
+  let firstInitiatorLineNumber = 0;
+
+  if (firstLastFrame) {
+    firstInitiator = getUrlBaseName(firstLastFrame.file);
+    firstInitiatorLineNumber = firstLastFrame.line;
+  }
+
+  let secondInitiator = "";
+  let secondInitiatorLineNumber = 0;
+
+  if (secondLastFrame) {
+    secondInitiator = getUrlBaseName(secondLastFrame.file);
+    secondInitiatorLineNumber = secondLastFrame.line;
+  }
+
+  let result;
+  // if both initiators don't have a stack trace, compare their causes
+  if (!firstInitiator && !secondInitiator) {
+    result = compareValues(first.causeType, second.causeType);
+  } else if (!firstInitiator || !secondInitiator) {
+    // if one initiator doesn't have a stack trace but the other does, former should precede the latter
+    result = compareValues(firstInitiatorLineNumber, secondInitiatorLineNumber);
+  } else {
+    result = compareValues(firstInitiator, secondInitiator);
+    if (result === 0) {
+      result = compareValues(
+        firstInitiatorLineNumber,
+        secondInitiatorLineNumber
+      );
+    }
+  }
+  return result;
+}

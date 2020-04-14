@@ -101,14 +101,13 @@ static bool ParseNodeRequiresSpecialLineNumberNotes(ParseNode* pn) {
 
 BytecodeEmitter::BytecodeEmitter(
     BytecodeEmitter* parent, SharedContext* sc, HandleScript script,
-    Handle<BaseScript*> lazyScript, uint32_t line, uint32_t column,
-    CompilationInfo& compilationInfo, EmitterMode emitterMode,
+    uint32_t line, uint32_t column, CompilationInfo& compilationInfo,
+    EmitterMode emitterMode,
     FieldInitializers fieldInitializers /* = FieldInitializers::Invalid() */)
     : sc(sc),
       cx(sc->cx_),
       parent(parent),
       script(cx, script),
-      lazyScript(cx, lazyScript),
       bytecodeSection_(cx, line),
       perScriptData_(cx, compilationInfo),
       fieldInitializers_(fieldInitializers),
@@ -116,32 +115,34 @@ BytecodeEmitter::BytecodeEmitter(
       firstLine(line),
       firstColumn(column),
       emitterMode(emitterMode) {
-  MOZ_ASSERT_IF(emitterMode == LazyFunction, lazyScript);
-
   if (IsTypeInferenceEnabled() && sc->isFunctionBox()) {
     // Functions have IC entries for type monitoring |this| and arguments.
     bytecodeSection().setNumICEntries(sc->asFunctionBox()->nargs() + 1);
   }
 }
 
-BytecodeEmitter::BytecodeEmitter(
-    BytecodeEmitter* parent, BCEParserHandle* handle, SharedContext* sc,
-    HandleScript script, Handle<BaseScript*> lazyScript, uint32_t line,
-    uint32_t column, CompilationInfo& compilationInfo, EmitterMode emitterMode,
-    FieldInitializers fieldInitializers)
-    : BytecodeEmitter(parent, sc, script, lazyScript, line, column,
-                      compilationInfo, emitterMode, fieldInitializers) {
+BytecodeEmitter::BytecodeEmitter(BytecodeEmitter* parent,
+                                 BCEParserHandle* handle, SharedContext* sc,
+                                 HandleScript script, uint32_t line,
+                                 uint32_t column,
+                                 CompilationInfo& compilationInfo,
+                                 EmitterMode emitterMode,
+                                 FieldInitializers fieldInitializers)
+    : BytecodeEmitter(parent, sc, script, line, column, compilationInfo,
+                      emitterMode, fieldInitializers) {
   parser = handle;
   instrumentationKinds = parser->options().instrumentationKinds;
 }
 
-BytecodeEmitter::BytecodeEmitter(
-    BytecodeEmitter* parent, const EitherParser& parser, SharedContext* sc,
-    HandleScript script, Handle<BaseScript*> lazyScript, uint32_t line,
-    uint32_t column, CompilationInfo& compilationInfo, EmitterMode emitterMode,
-    FieldInitializers fieldInitializers)
-    : BytecodeEmitter(parent, sc, script, lazyScript, line, column,
-                      compilationInfo, emitterMode, fieldInitializers) {
+BytecodeEmitter::BytecodeEmitter(BytecodeEmitter* parent,
+                                 const EitherParser& parser, SharedContext* sc,
+                                 HandleScript script, uint32_t line,
+                                 uint32_t column,
+                                 CompilationInfo& compilationInfo,
+                                 EmitterMode emitterMode,
+                                 FieldInitializers fieldInitializers)
+    : BytecodeEmitter(parent, sc, script, line, column, compilationInfo,
+                      emitterMode, fieldInitializers) {
   ep_.emplace(parser);
   this->parser = ep_.ptr();
   instrumentationKinds = this->parser->options().instrumentationKinds;
@@ -2163,12 +2164,8 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitSwitch(SwitchStatement* switchStmt) {
 }
 
 bool BytecodeEmitter::isRunOnceLambda() {
-  if (lazyScript) {
-    // NOTE: The TreatAsRunOnce flag on lazy BaseScript was computed without a
-    // complete 'funbox' so we must compute the shouldSuppressRunOnce conditions
-    // now that we have the full parse info.
-    return lazyScript->treatAsRunOnce() &&
-           !sc->asFunctionBox()->shouldSuppressRunOnce();
+  if (emitterMode == LazyFunction) {
+    return sc->asFunctionBox()->treatAsRunOnce();
   }
 
   return parent && parent->emittingRunOnceLambda &&
@@ -5505,16 +5502,15 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitFunction(
     RootedFunction fun(cx, funbox->function());
     RootedScript innerScript(
         cx, JSScript::Create(
-                cx, fun, compilationInfo.sourceObject,
-                ImmutableScriptFlags::fromCompileOptions(transitiveOptions),
-                funbox->extent));
+                cx, fun, compilationInfo.sourceObject, funbox->extent,
+                ImmutableScriptFlags::fromCompileOptions(transitiveOptions)));
     if (!innerScript) {
       return false;
     }
 
     EmitterMode nestedMode = emitterMode;
     if (nestedMode == BytecodeEmitter::LazyFunction) {
-      MOZ_ASSERT(lazyScript->isBinAST());
+      MOZ_ASSERT(script->isBinAST());
       nestedMode = BytecodeEmitter::Normal;
     }
 
@@ -5532,9 +5528,8 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitFunction(
     }
 
     BytecodeEmitter bce2(this, parser, funbox, innerScript,
-                         /* lazyScript = */ nullptr, funbox->extent.lineno,
-                         funbox->extent.column, compilationInfo, nestedMode,
-                         *fieldInitializers);
+                         funbox->extent.lineno, funbox->extent.column,
+                         compilationInfo, nestedMode, *fieldInitializers);
     if (!bce2.init(funNode->pn_pos)) {
       return false;
     }
@@ -7072,6 +7067,23 @@ bool BytecodeEmitter::emitSelfHostedGetPropertySuper(BinaryNode* callNode) {
   return emitElemOpBase(JSOp::GetElemSuper);
 }
 
+bool BytecodeEmitter::emitSelfHostedToNumeric(BinaryNode* callNode) {
+  ListNode* argsList = &callNode->right()->as<ListNode>();
+
+  if (argsList->count() != 1) {
+    reportNeedMoreArgsError(callNode, "ToNumeric", "1", "", argsList);
+    return false;
+  }
+
+  ParseNode* argNode = argsList->head();
+
+  if (!emitTree(argNode)) {
+    return false;
+  }
+
+  return emit1(JSOp::ToNumeric);
+}
+
 bool BytecodeEmitter::isRestParameter(ParseNode* expr) {
   if (!sc->isFunctionBox()) {
     return false;
@@ -7545,6 +7557,9 @@ bool BytecodeEmitter::emitCallOrNew(
     if (calleeName == cx->names().getPropertySuper) {
       return emitSelfHostedGetPropertySuper(callNode);
     }
+    if (calleeName == cx->names().ToNumeric) {
+      return emitSelfHostedToNumeric(callNode);
+    }
     // Fall through
   }
 
@@ -7723,6 +7738,7 @@ bool BytecodeEmitter::emitOptionalTree(
           kind == ParseNodeKind::Function || kind == ParseNodeKind::ClassDecl ||
           kind == ParseNodeKind::RegExpExpr ||
           kind == ParseNodeKind::TemplateStringExpr ||
+          kind == ParseNodeKind::TemplateStringListExpr ||
           kind == ParseNodeKind::RawUndefinedExpr || pn->isInParens();
 
       // https://tc39.es/ecma262/#sec-left-hand-side-expressions
@@ -9146,8 +9162,11 @@ bool BytecodeEmitter::emitArrayLiteral(ListNode* array) {
     // every time the initializer executes. In non-singleton mode, don't do
     // this if the array is small: copying the elements lazily is not worth it
     // in that case.
+    // Note: for now we don't use COW arrays if TI is disabled. We probably need
+    // a BaseShape flag to optimize this better without TI. See bug 1626854.
     static const size_t MinElementsForCopyOnWrite = 5;
-    if (emitterMode != BytecodeEmitter::SelfHosting &&
+    if (IsTypeInferenceEnabled() &&
+        emitterMode != BytecodeEmitter::SelfHosting &&
         (array->count() >= MinElementsForCopyOnWrite || isSingleton) &&
         isArrayObjLiteralCompatible(array->head())) {
       return emitObjLiteralArray(array->head(), /* isCow = */ !isSingleton);
@@ -9486,7 +9505,7 @@ bool BytecodeEmitter::emitInitializeFunctionSpecialNames() {
       };
 
   // Do nothing if the function doesn't have an arguments binding.
-  if (funbox->argumentsHasLocalBinding()) {
+  if (funbox->argumentsHasVarBinding()) {
     if (!emitInitializeFunctionSpecialName(this, cx->names().arguments,
                                            JSOp::Arguments)) {
       //            [stack]

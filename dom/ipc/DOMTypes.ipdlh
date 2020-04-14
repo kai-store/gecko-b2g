@@ -266,6 +266,8 @@ struct DocShellLoadStateInit
   // encounters a server side redirect.
   nsIContentSecurityPolicy Csp;
 
+  MaybeDiscardedBrowsingContext SourceBrowsingContext;
+
   nsCString? OriginalURIString;
   int32_t? CancelContentJSEpoch;
 
@@ -356,7 +358,6 @@ struct ParentShowInfo
 {
   nsString name;
   bool fullscreenAllowed;
-  bool isPrivate;
   bool fakeShowInfo;
   bool isTransparent;
   float dpi;

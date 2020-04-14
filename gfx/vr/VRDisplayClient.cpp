@@ -14,8 +14,11 @@
 #include "nsString.h"
 #include "mozilla/dom/GamepadManager.h"
 #include "mozilla/dom/Gamepad.h"
+#include "mozilla/dom/XRSession.h"
+#include "mozilla/dom/XRInputSourceArray.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Unused.h"
+#include "mozilla/dom/WebXRBinding.h"
 #include "nsServiceManagerUtils.h"
 
 #ifdef XP_WIN
@@ -37,7 +40,8 @@ VRDisplayClient::VRDisplayClient(const VRDisplayInfo& aDisplayInfo)
       mPresentationCount(0),
       mLastEventFrameId(0),
       mLastPresentingGeneration(0),
-      mLastEventControllerState{} {
+      mLastEventControllerState{},
+      mAPIMode(VRAPIMode::WebXR) {
   MOZ_COUNT_CTOR(VRDisplayClient);
 }
 
@@ -50,13 +54,36 @@ void VRDisplayClient::UpdateDisplayInfo(const VRDisplayInfo& aDisplayInfo) {
 
 already_AddRefed<VRDisplayPresentation> VRDisplayClient::BeginPresentation(
     const nsTArray<mozilla::dom::VRLayer>& aLayers, uint32_t aGroup) {
-  ++mPresentationCount;
+  PresentationCreated();
   RefPtr<VRDisplayPresentation> presentation =
       new VRDisplayPresentation(this, aLayers, aGroup);
   return presentation.forget();
 }
 
+void VRDisplayClient::PresentationCreated() { ++mPresentationCount; }
+
 void VRDisplayClient::PresentationDestroyed() { --mPresentationCount; }
+
+void VRDisplayClient::SessionStarted(dom::XRSession* aSession) {
+  PresentationCreated();
+  MakePresentationGenerationCurrent();
+  mSessions.AppendElement(aSession);
+}
+void VRDisplayClient::SessionEnded(dom::XRSession* aSession) {
+  mSessions.RemoveElement(aSession);
+  PresentationDestroyed();
+}
+
+void VRDisplayClient::StartFrame() {
+  RefPtr<VRManagerChild> vm = VRManagerChild::Get();
+  vm->RunFrameRequestCallbacks();
+
+  nsTArray<RefPtr<dom::XRSession>> sessions;
+  sessions.AppendElements(mSessions);
+  for (auto session : sessions) {
+    session->StartFrame();
+  }
+}
 
 void VRDisplayClient::SetGroupMask(uint32_t aGroupMask) {
   VRManagerChild* vm = VRManagerChild::Get();
@@ -74,6 +101,10 @@ bool VRDisplayClient::IsPresentationGenerationCurrent() const {
 
 void VRDisplayClient::MakePresentationGenerationCurrent() {
   mLastPresentingGeneration = mDisplayInfo.mDisplayState.presentingGeneration;
+}
+
+void VRDisplayClient::SetXRAPIMode(gfx::VRAPIMode aMode) {
+  mAPIMode = aMode;
 }
 
 void VRDisplayClient::FireEvents() {
@@ -112,11 +143,21 @@ void VRDisplayClient::FireEvents() {
   // Check if we need to trigger VRDisplay.requestAnimationFrame
   if (mLastEventFrameId != mDisplayInfo.mFrameId) {
     mLastEventFrameId = mDisplayInfo.mFrameId;
-    vm->RunFrameRequestCallbacks();
+    StartFrame();
   }
 
-  // We only call FireGamepadEvents() in WebVR instead of WebXR
-  FireGamepadEvents();
+  // In WebXR spec, Gamepad instances returned by an XRInputSource's gamepad attribute
+  // MUST NOT be included in the array returned by navigator.getGamepads().
+  if (mAPIMode == VRAPIMode::WebVR) {
+    FireGamepadEvents();
+  }
+  // Update controller states into XRInputSourceArray.
+  for (auto& session : mSessions) {
+    dom::XRInputSourceArray* inputs = session->InputSources();
+    if (inputs) {
+      inputs->Update(session);
+    }
+  }
 }
 
 void VRDisplayClient::GamepadMappingForWebVR(
@@ -237,6 +278,26 @@ void VRDisplayClient::GamepadMappingForWebVR(
       aControllerState.axisValue[1] = aControllerState.axisValue[3];
       aControllerState.numButtons = 6;
       aControllerState.numAxes = 2;
+      break;
+    case VRControllerType::ValveIndex:
+      aControllerState.buttonPressed =
+          ShiftButtonBitForNewSlot(1, 0) | ShiftButtonBitForNewSlot(2, 1) |
+          ShiftButtonBitForNewSlot(0, 2) | ShiftButtonBitForNewSlot(5, 3) |
+          ShiftButtonBitForNewSlot(3, 4) | ShiftButtonBitForNewSlot(4, 5) |
+          ShiftButtonBitForNewSlot(6, 6) | ShiftButtonBitForNewSlot(7, 7) |
+          ShiftButtonBitForNewSlot(8, 8) | ShiftButtonBitForNewSlot(9, 9);
+      aControllerState.buttonTouched = ShiftButtonBitForNewSlot(1, 0, true) |
+                                       ShiftButtonBitForNewSlot(2, 1, true) |
+                                       ShiftButtonBitForNewSlot(0, 2, true) |
+                                       ShiftButtonBitForNewSlot(5, 3, true) |
+                                       ShiftButtonBitForNewSlot(3, 4, true) |
+                                       ShiftButtonBitForNewSlot(4, 5, true) |
+                                       ShiftButtonBitForNewSlot(6, 6, true) |
+                                       ShiftButtonBitForNewSlot(7, 7, true) |
+                                       ShiftButtonBitForNewSlot(8, 8, true) |
+                                       ShiftButtonBitForNewSlot(9, 9, true);
+      aControllerState.numButtons = 10;
+      aControllerState.numAxes = 4;
       break;
     case VRControllerType::PicoGaze:
       aControllerState.buttonPressed = ShiftButtonBitForNewSlot(0, 0);
@@ -469,4 +530,36 @@ void VRDisplayClient::StopVRNavigation(const TimeDuration& aTimeout) {
    */
   VRManagerChild* vm = VRManagerChild::Get();
   vm->SendStopVRNavigation(mDisplayInfo.mDisplayID, aTimeout);
+}
+
+bool VRDisplayClient::IsReferenceSpaceTypeSupported(
+    dom::XRReferenceSpaceType aType) const {
+  /**
+   * https://immersive-web.github.io/webxr/#reference-space-is-supported
+   *
+   * We do not yet support local or local-floor for inline sessions.
+   * This could be expanded if we later support WebXR for inline-ar
+   * sessions on Firefox Fenix.
+   *
+   * We do not yet support unbounded reference spaces.
+   */
+  switch (aType) {
+    case dom::XRReferenceSpaceType::Viewer:
+      // Viewer is always supported, for both inline and immersive sessions
+      return true;
+    case dom::XRReferenceSpaceType::Local:
+    case dom::XRReferenceSpaceType::Local_floor:
+      // Local and Local_Floor are always supported for immersive sessions
+      return bool(mDisplayInfo.GetCapabilities() &
+                  (VRDisplayCapabilityFlags::Cap_ImmersiveVR |
+                   VRDisplayCapabilityFlags::Cap_ImmersiveAR));
+    case dom::XRReferenceSpaceType::Bounded_floor:
+      return bool(mDisplayInfo.GetCapabilities() &
+                  VRDisplayCapabilityFlags::Cap_StageParameters);
+    default:
+      NS_WARNING(
+          "Unknown XRReferenceSpaceType passed to "
+          "VRDisplayClient::IsReferenceSpaceTypeSupported");
+      return false;
+  }
 }

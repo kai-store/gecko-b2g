@@ -43,6 +43,7 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/WeakPtr.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_javascript.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
@@ -126,10 +127,6 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
-
-#define BEFOREUNLOAD_DISABLED_PREFNAME "dom.disable_beforeunload"
-#define BEFOREUNLOAD_REQUIRES_INTERACTION_PREFNAME \
-  "dom.require_user_interaction_for_beforeunload"
 
 //-----------------------------------------------------
 // LOGGING
@@ -1262,18 +1259,6 @@ nsresult nsDocumentViewer::PermitUnloadInternal(uint32_t* aPermitUnloadFlags,
     return NS_OK;
   }
 
-  static bool sIsBeforeUnloadDisabled;
-  static bool sBeforeUnloadRequiresInteraction;
-  static bool sBeforeUnloadPrefsCached = false;
-
-  if (!sBeforeUnloadPrefsCached) {
-    sBeforeUnloadPrefsCached = true;
-    Preferences::AddBoolVarCache(&sIsBeforeUnloadDisabled,
-                                 BEFOREUNLOAD_DISABLED_PREFNAME);
-    Preferences::AddBoolVarCache(&sBeforeUnloadRequiresInteraction,
-                                 BEFOREUNLOAD_REQUIRES_INTERACTION_PREFNAME);
-  }
-
   // First, get the script global object from the document...
   nsPIDOMWindowOuter* window = mDocument->GetWindow();
 
@@ -1330,7 +1315,7 @@ nsresult nsDocumentViewer::PermitUnloadInternal(uint32_t* aPermitUnloadFlags,
   nsAutoString text;
   event->GetReturnValue(text);
 
-  if (sIsBeforeUnloadDisabled) {
+  if (StaticPrefs::dom_disable_beforeunload()) {
     *aPermitUnloadFlags = eDontPromptAndUnload;
   }
 
@@ -1338,7 +1323,8 @@ nsresult nsDocumentViewer::PermitUnloadInternal(uint32_t* aPermitUnloadFlags,
   // the event being dispatched.
   if (*aPermitUnloadFlags != eDontPromptAndUnload && dialogsAreEnabled &&
       mDocument && !(mDocument->GetSandboxFlags() & SANDBOXED_MODALS) &&
-      (!sBeforeUnloadRequiresInteraction || mDocument->UserHasInteracted()) &&
+      (!StaticPrefs::dom_require_user_interaction_for_beforeunload() ||
+       mDocument->UserHasInteracted()) &&
       (event->WidgetEventPtr()->DefaultPrevented() || !text.IsEmpty())) {
     // If the consumer wants prompt requests to just stop unloading, we don't
     // need to prompt and can return immediately.
@@ -2910,9 +2896,7 @@ void nsDocumentViewer::EmulateMediumInternal(nsAtom* aMedia) {
   auto childFn = [&](nsDocumentViewer* aChild) {
     aChild->EmulateMediumInternal(aMedia);
   };
-  auto presContextFn = [&](nsPresContext* aPc) {
-    aPc->EmulateMedium(aMedia);
-  };
+  auto presContextFn = [&](nsPresContext* aPc) { aPc->EmulateMedium(aMedia); };
   PropagateToPresContextsHelper(childFn, presContextFn);
 }
 
@@ -3149,8 +3133,10 @@ nsresult nsDocumentViewer::GetContentSizeInternal(int32_t* aWidth,
                      shellArea.height != NS_UNCONSTRAINEDSIZE,
                  NS_ERROR_FAILURE);
 
-  *aWidth = presContext->AppUnitsToDevPixels(shellArea.width);
-  *aHeight = presContext->AppUnitsToDevPixels(shellArea.height);
+  // Ceil instead of rounding here, so we can actually guarantee showing all the
+  // content.
+  *aWidth = std::ceil(presContext->AppUnitsToFloatDevPixels(shellArea.width));
+  *aHeight = std::ceil(presContext->AppUnitsToFloatDevPixels(shellArea.height));
 
   return NS_OK;
 }

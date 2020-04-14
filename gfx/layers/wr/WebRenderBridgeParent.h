@@ -431,9 +431,12 @@ class WebRenderBridgeParent final
                        const nsTArray<RefCountedShmem>& aSmallShmems,
                        const nsTArray<ipc::Shmem>& aLargeShmems,
                        wr::TransactionBuilder& aUpdates);
-  bool AddExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey,
-                        wr::TransactionBuilder& aResources);
-  bool UpdateExternalImage(
+  bool AddPrivateExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey,
+                               wr::ImageDescriptor aDesc,
+                               wr::TransactionBuilder& aResources);
+  bool AddSharedExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey,
+                              wr::TransactionBuilder& aResources);
+  bool UpdateSharedExternalImage(
       wr::ExternalImageId aExtId, wr::ImageKey aKey,
       const ImageIntRect& aDirtyRect, wr::TransactionBuilder& aResources,
       UniquePtr<ScheduleSharedSurfaceRelease>& aScheduleRelease);
@@ -626,6 +629,7 @@ class WebRenderBridgeParent final
   bool mReceivedDisplayList;
   bool mIsFirstPaint;
   bool mSkippedComposite;
+  bool mDisablingNativeCompositor;
   // These payloads are being used for SCROLL_PRESENT_LATENCY telemetry
   DataMutex<nsClassHashtable<PipelineIdAndEpochHashEntry,
                              nsTArray<CompositionPayload>>>

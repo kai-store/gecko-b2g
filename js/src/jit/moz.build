@@ -90,10 +90,11 @@ UNIFIED_SOURCES += [
     'VMFunctions.cpp',
     'WarpBuilder.cpp',
     'WarpOracle.cpp',
+    'WarpSnapshot.cpp',
     'WasmBCE.cpp',
 ]
 
-if not CONFIG['ENABLE_ION']:
+if CONFIG['JS_CODEGEN_NONE']:
     lir_inputs += ['none/LIR-none.h']
     UNIFIED_SOURCES += [
         'none/Trampoline-none.cpp'

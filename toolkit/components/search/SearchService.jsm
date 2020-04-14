@@ -1126,47 +1126,7 @@ SearchService.prototype = {
   async _loadEngines(cache, isReload) {
     SearchUtils.log("_loadEngines: start");
     let engines = await this._findEngines();
-
-    // Get the non-empty distribution directories into distDirs...
-    let distDirs = [];
-    let locations;
-    try {
-      locations = Services.dirsvc.get(
-        NS_APP_DISTRIBUTION_SEARCH_DIR_LIST,
-        Ci.nsISimpleEnumerator
-      );
-    } catch (e) {
-      // NS_APP_DISTRIBUTION_SEARCH_DIR_LIST is defined by each app
-      // so this throws during unit tests (but not xpcshell tests).
-      locations = [];
-    }
-    for (let dir of locations) {
-      let iterator = new OS.File.DirectoryIterator(dir.path, {
-        winPattern: "*.xml",
-      });
-      try {
-        // Add dir to distDirs if it contains any files.
-        let { done } = await iterator.next();
-        if (!done) {
-          distDirs.push(dir);
-        }
-      } catch (ex) {
-        if (!(ex instanceof OS.File.Error)) {
-          throw ex;
-        }
-        if (ex.becauseAccessDenied) {
-          Cu.reportError(
-            "Not loading distribution files because access was denied."
-          );
-        } else if (!ex.becauseNoSuchFile) {
-          throw ex;
-        }
-      } finally {
-        // If there's an issue on close, we can't do anything about it. It could
-        // be that reading the iterator never fully opened.
-        iterator.close().catch(Cu.reportError);
-      }
-    }
+    let distDirs = await this._getDistibutionEngineDirectories();
 
     let buildID = Services.appinfo.platformBuildID;
     let rebuildCache =
@@ -1333,6 +1293,59 @@ SearchService.prototype = {
       }
     }
     return engines;
+  },
+
+  /**
+   * Get the directories that contain distribution engines.
+   *
+   * @returns {array}
+   *   Returns an array of directories that contain distribution engines.
+   */
+  async _getDistibutionEngineDirectories() {
+    if (gModernConfig) {
+      return [];
+    }
+    // Get the non-empty distribution directories into distDirs...
+    let distDirs = [];
+    let locations;
+    try {
+      locations = Services.dirsvc.get(
+        NS_APP_DISTRIBUTION_SEARCH_DIR_LIST,
+        Ci.nsISimpleEnumerator
+      );
+    } catch (e) {
+      // NS_APP_DISTRIBUTION_SEARCH_DIR_LIST is defined by each app
+      // so this throws during unit tests (but not xpcshell tests).
+      locations = [];
+    }
+    for (let dir of locations) {
+      let iterator = new OS.File.DirectoryIterator(dir.path, {
+        winPattern: "*.xml",
+      });
+      try {
+        // Add dir to distDirs if it contains any files.
+        let { done } = await iterator.next();
+        if (!done) {
+          distDirs.push(dir);
+        }
+      } catch (ex) {
+        if (!(ex instanceof OS.File.Error)) {
+          throw ex;
+        }
+        if (ex.becauseAccessDenied) {
+          Cu.reportError(
+            "Not loading distribution files because access was denied."
+          );
+        } else if (!ex.becauseNoSuchFile) {
+          throw ex;
+        }
+      } finally {
+        // If there's an issue on close, we can't do anything about it. It could
+        // be that reading the iterator never fully opened.
+        iterator.close().catch(Cu.reportError);
+      }
+    }
+    return distDirs;
   },
 
   /**
@@ -1764,7 +1777,14 @@ SearchService.prototype = {
         SearchUtils.log(
           "_loadEnginesMetadataFromCache, transfering metadata for " + name
         );
-        this._engines.get(name)._metaData = engine._metaData || {};
+        let eng = this._engines.get(name);
+        // We used to store the alias in metadata.alias, in 1621892 that was
+        // changed to only store the user set alias in metadata.alias, remove
+        // it from metadata if it was previously set to the internal value.
+        if (eng._alias === engine?._metaData?.alias) {
+          delete engine._metaData.alias;
+        }
+        eng._metaData = engine._metaData || {};
       }
     }
   },
@@ -2418,7 +2438,7 @@ SearchService.prototype = {
     await this.init();
 
     return this._sortEnginesByDefaults(
-      this._sortedEngines.filter(e => e._isDefault)
+      this._sortedEngines.filter(e => e.isAppProvided)
     );
   },
 
@@ -2557,6 +2577,18 @@ SearchService.prototype = {
     if (!gInitialized) {
       this._startupExtensions.add(extension);
       return [];
+    }
+    if (extension.startupReason == "ADDON_UPGRADE") {
+      let engines = await Services.search.getEnginesByExtensionID(extension.id);
+      for (let engine of engines) {
+        let params = await this.getEngineParams(
+          extension,
+          extension.manifest,
+          SearchUtils.DEFAULT_TAG
+        );
+        engine._updateFromMetadata(params);
+      }
+      return engines;
     }
     return this._installExtensionEngine(extension, [SearchUtils.DEFAULT_TAG]);
   },
@@ -2966,7 +2998,7 @@ SearchService.prototype = {
     this._ensureInitialized();
     for (let e of this._engines.values()) {
       // Unhide all default engines
-      if (e.hidden && e._isDefault) {
+      if (e.hidden && e.isAppProvided) {
         e.hidden = false;
       }
     }
@@ -2994,7 +3026,7 @@ SearchService.prototype = {
         engine &&
         (this.getGlobalAttr(privateMode ? "privateHash" : "hash") ==
           getVerificationHash(name) ||
-          engine._isDefault)
+          engine.isAppProvided)
       ) {
         // If the current engine is a default one, we can relax the
         // verification hash check to reduce the annoyance for users who
@@ -3075,7 +3107,7 @@ SearchService.prototype = {
       SearchUtils.fail("Can't find engine in store!", Cr.NS_ERROR_UNEXPECTED);
     }
 
-    if (!newCurrentEngine._isDefault) {
+    if (!newCurrentEngine.isAppProvided) {
       // If a non default engine is being set as the current engine, ensure
       // its loadPath has a verification hash.
       if (!newCurrentEngine._loadPath) {
@@ -3202,7 +3234,7 @@ SearchService.prototype = {
       name: engine.name ? engine.name : "",
     };
 
-    if (engine._isDefault) {
+    if (engine.isAppProvided) {
       engineData.origin = "default";
     } else {
       let currentHash = engine.getAttr("loadPathHash");
@@ -3216,7 +3248,7 @@ SearchService.prototype = {
     }
 
     // For privacy, we only collect the submission URL for default engines...
-    let sendSubmissionURL = engine._isDefault;
+    let sendSubmissionURL = engine.isAppProvided;
 
     // ... or engines sorted by default near the top of the list.
     if (!sendSubmissionURL) {
@@ -3252,7 +3284,7 @@ SearchService.prototype = {
       let engineHost = engine._getURLOfType(SearchUtils.URL_TYPE.SEARCH)
         .templateHost;
       for (let innerEngine of this._engines.values()) {
-        if (!innerEngine._isDefault) {
+        if (!innerEngine.isAppProvided) {
           continue;
         }
 
@@ -3764,7 +3796,7 @@ var engineUpdateService = {
         ? updateURL.getSubmission("", engine).uri
         : SearchUtils.makeURI(engine._updateURL);
     if (updateURI) {
-      if (engine._isDefault && !updateURI.schemeIs("https")) {
+      if (engine.isAppProvided && !updateURI.schemeIs("https")) {
         this._log("Invalid scheme for default engine update");
         return;
       }

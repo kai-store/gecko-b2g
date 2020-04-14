@@ -47,7 +47,7 @@ bool wasm::CraneliftPlatformSupport() {
 static inline SymbolicAddress ToSymbolicAddress(BD_SymbolicAddress bd) {
   switch (bd) {
     case BD_SymbolicAddress::RefFunc:
-      return SymbolicAddress::FuncRef;
+      return SymbolicAddress::RefFunc;
     case BD_SymbolicAddress::MemoryGrow:
       return SymbolicAddress::MemoryGrow;
     case BD_SymbolicAddress::MemorySize:
@@ -141,9 +141,11 @@ static bool GenerateCraneliftCode(WasmMacroAssembler& masm,
             &functionEntryStackMap)) {
       return false;
     }
+
     // In debug builds, we'll always have a stack map, even if there are no
     // refs to track.
-    MOZ_ALWAYS_TRUE(functionEntryStackMap);
+    MOZ_ASSERT(functionEntryStackMap);
+
     if (functionEntryStackMap &&
         !stackMaps->add((uint8_t*)(uintptr_t)trapInsnOffset.offset(),
                         functionEntryStackMap)) {
@@ -585,7 +587,7 @@ BD_ConstantValue global_constantValue(const GlobalDesc* global) {
     case TypeCode::F64:
       v.u.f64 = value.f64();
       break;
-    case TypeCode::Ref:
+    case TypeCode::OptRef:
       v.u.r = value.ref().forCompiledCode();
       break;
     default:

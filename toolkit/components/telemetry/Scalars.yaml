@@ -575,6 +575,26 @@ browser.usage:
       - 'main'
       - 'content'
 
+browser.input:
+  touch_event_count:
+    bug_numbers:
+      - 1626099
+    description: >-
+      Windows only.
+      Counts occurrences of touch events,
+      measured when user starts a touch event.
+    expires: "90"
+    kind: uint
+    notification_emails:
+      - gfx-telemetry-alerts@mozilla.com
+      - ktaeleman@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
+      - 'content'
+
 gecko:
   version:
     bug_numbers:
@@ -3721,6 +3741,7 @@ startup:
     bug_numbers:
       - 1522934
       - 1570652
+      - 1623406
     description: >
       How the profile was selected during startup. One of the following reasons:
         unknown:
@@ -3753,12 +3774,15 @@ startup:
           A first run of the application created a new profile to use.
         default:
           The default profile was selected as normal.
-    expires: "77"
+    expires: "88"
     keyed: false
     kind: string
     notification_emails:
       - dtownsend@mozilla.com
       - rtestard@mozilla.com
+      - gkaberere@mozilla.com
+      - jhollek@mozilla.com
+      - echo@mozilla.com
     release_channel_collection: opt-out
     products:
       - 'firefox'

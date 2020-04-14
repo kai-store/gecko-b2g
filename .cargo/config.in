@@ -15,7 +15,7 @@ rev = "e3c3388e6632cf55e08d773b32e58b1cab9b2731"
 [source."https://github.com/mozilla/neqo"]
 git = "https://github.com/mozilla/neqo"
 replace-with = "vendored-sources"
-tag = "v0.2.3"
+tag = "v0.2.4"
 
 [source."https://github.com/mozilla/application-services"]
 git = "https://github.com/mozilla/application-services"
@@ -25,7 +25,7 @@ rev = "120e51dd5f2aab4194cf0f7e93b2a8923f4504bb"
 [source."https://github.com/mozilla-spidermonkey/jsparagus"]
 git = "https://github.com/mozilla-spidermonkey/jsparagus"
 replace-with = "vendored-sources"
-rev = "1e747c70bd5b2e959880a57f57ed435660aaafe6"
+rev = "60952724c192a54f8d46c0f481f4bd8967c9bb6a"
 
 [source."https://github.com/kvark/spirv_cross"]
 branch = "wgpu"
@@ -62,11 +62,6 @@ git = "https://github.com/badboy/failure"
 replace-with = "vendored-sources"
 rev = "64af847bc5fdcb6d2438bec8a6030812a80519a5"
 
-[source."https://github.com/alexcrichton/mio-named-pipes"]
-branch = "master"
-git = "https://github.com/alexcrichton/mio-named-pipes"
-replace-with = "vendored-sources"
-
 [source."https://github.com/PLSysSec/rlbox_lucet_sandbox/"]
 git = "https://github.com/PLSysSec/rlbox_lucet_sandbox/"
 replace-with = "vendored-sources"
@@ -80,7 +75,7 @@ rev = "5e870faf6f95d79d11efc813e56370ad124bbed5"
 [source."https://github.com/ChunMinChang/cubeb-coreaudio-rs"]
 git = "https://github.com/ChunMinChang/cubeb-coreaudio-rs"
 replace-with = "vendored-sources"
-rev = "432259ab53295ca98a2df0c0e6c73d132b273e97"
+rev = "ea9e5aa3e6014f219cf5fa0690bc4b06916f0b09"
 
 [source.crates-io]
 replace-with = "vendored-sources"

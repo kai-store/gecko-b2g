@@ -75,8 +75,7 @@ void gecko_profiler_end_marker(const char* name) {
 void gecko_profiler_event_marker(const char* name) {
 #ifdef MOZ_GECKO_PROFILER
   profiler_tracing_marker("WebRender", name,
-                          JS::ProfilingCategoryPair::GRAPHICS,
-                          TRACING_EVENT);
+                          JS::ProfilingCategoryPair::GRAPHICS, TRACING_EVENT);
 #endif
 }
 
@@ -351,6 +350,7 @@ WebRenderBridgeParent::WebRenderBridgeParent(
       mReceivedDisplayList(false),
       mIsFirstPaint(true),
       mSkippedComposite(false),
+      mDisablingNativeCompositor(false),
       mPendingScrollPayloads("WebRenderBridgeParent::mPendingScrollPayloads") {
   MOZ_ASSERT(mAsyncImageManager);
   MOZ_ASSERT(mAnimStorage);
@@ -384,6 +384,7 @@ WebRenderBridgeParent::WebRenderBridgeParent(const wr::PipelineId& aPipelineId)
       mReceivedDisplayList(false),
       mIsFirstPaint(false),
       mSkippedComposite(false),
+      mDisablingNativeCompositor(false),
       mPendingScrollPayloads("WebRenderBridgeParent::mPendingScrollPayloads") {}
 
 WebRenderBridgeParent::~WebRenderBridgeParent() {
@@ -667,9 +668,17 @@ bool WebRenderBridgeParent::UpdateResources(
                                          wr::ToDeviceIntRect(op.area()));
         break;
       }
-      case OpUpdateResource::TOpAddExternalImage: {
-        const auto& op = cmd.get_OpAddExternalImage();
-        if (!AddExternalImage(op.externalImageId(), op.key(), aUpdates)) {
+      case OpUpdateResource::TOpAddPrivateExternalImage: {
+        const auto& op = cmd.get_OpAddPrivateExternalImage();
+        if (!AddPrivateExternalImage(op.externalImageId(), op.key(),
+                                     op.descriptor(), aUpdates)) {
+          return false;
+        }
+        break;
+      }
+      case OpUpdateResource::TOpAddSharedExternalImage: {
+        const auto& op = cmd.get_OpAddSharedExternalImage();
+        if (!AddSharedExternalImage(op.externalImageId(), op.key(), aUpdates)) {
           return false;
         }
         break;
@@ -684,10 +693,11 @@ bool WebRenderBridgeParent::UpdateResources(
         }
         break;
       }
-      case OpUpdateResource::TOpUpdateExternalImage: {
-        const auto& op = cmd.get_OpUpdateExternalImage();
-        if (!UpdateExternalImage(op.externalImageId(), op.key(), op.dirtyRect(),
-                                 aUpdates, scheduleRelease)) {
+      case OpUpdateResource::TOpUpdateSharedExternalImage: {
+        const auto& op = cmd.get_OpUpdateSharedExternalImage();
+        if (!UpdateSharedExternalImage(op.externalImageId(), op.key(),
+                                       op.dirtyRect(), aUpdates,
+                                       scheduleRelease)) {
           return false;
         }
         break;
@@ -754,7 +764,22 @@ bool WebRenderBridgeParent::UpdateResources(
   return true;
 }
 
-bool WebRenderBridgeParent::AddExternalImage(
+bool WebRenderBridgeParent::AddPrivateExternalImage(
+    wr::ExternalImageId aExtId, wr::ImageKey aKey, wr::ImageDescriptor aDesc,
+    wr::TransactionBuilder& aResources) {
+  Range<wr::ImageKey> keys(&aKey, 1);
+  // Check if key is obsoleted.
+  if (keys[0].mNamespace != mIdNamespace) {
+    return true;
+  }
+
+  aResources.AddExternalImage(aKey, aDesc, aExtId,
+                              wr::ExternalImageType::Buffer(), 0);
+
+  return true;
+}
+
+bool WebRenderBridgeParent::AddSharedExternalImage(
     wr::ExternalImageId aExtId, wr::ImageKey aKey,
     wr::TransactionBuilder& aResources) {
   Range<wr::ImageKey> keys(&aKey, 1);
@@ -869,7 +894,7 @@ bool WebRenderBridgeParent::PushExternalImageForTexture(
   return true;
 }
 
-bool WebRenderBridgeParent::UpdateExternalImage(
+bool WebRenderBridgeParent::UpdateSharedExternalImage(
     wr::ExternalImageId aExtId, wr::ImageKey aKey,
     const ImageIntRect& aDirtyRect, wr::TransactionBuilder& aResources,
     UniquePtr<ScheduleSharedSurfaceRelease>& aScheduleRelease) {
@@ -1732,6 +1757,8 @@ void WebRenderBridgeParent::DisableNativeCompositor() {
   mApis[wr::RenderRoot::Default]->EnableNativeCompositor(false);
   // Ensure we generate and render a frame immediately.
   ScheduleForcedGenerateFrame();
+
+  mDisablingNativeCompositor = true;
 }
 
 void WebRenderBridgeParent::UpdateQualitySettings() {
@@ -2453,6 +2480,16 @@ void WebRenderBridgeParent::MaybeGenerateFrame(VsyncId aId,
 #endif
 
   mMostRecentComposite = TimeStamp::Now();
+
+  // During disabling native compositor, webrender needs to render twice.
+  // Otherwise, browser flashes black.
+  // XXX better fix?
+  if (mDisablingNativeCompositor) {
+    mDisablingNativeCompositor = false;
+
+    // Ensure we generate and render a frame immediately.
+    ScheduleForcedGenerateFrame();
+  }
 }
 
 void WebRenderBridgeParent::HoldPendingTransactionId(
@@ -2576,9 +2613,6 @@ TransactionId WebRenderBridgeParent::FlushTransactionIdsForEpoch(
             transactionId.mTxnStartTime, transactionId.mRefreshStartTime,
             transactionId.mFwdTime, transactionId.mSceneBuiltTime,
             transactionId.mSkippedComposites, transactionId.mTxnURL));
-
-        wr::RenderThread::Get()->NotifySlowFrame(
-            mApis[wr::RenderRoot::Default]->GetId());
       }
     }
 

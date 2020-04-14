@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "VRManagerChild.h"
+#include "VRLayerChild.h"
 #include "VRManagerParent.h"
 #include "VRThread.h"
 #include "VRDisplayClient.h"
@@ -13,7 +14,10 @@
 #include "mozilla/layers/CompositorThread.h"  // for CompositorThread
 #include "mozilla/dom/Navigator.h"
 #include "mozilla/dom/VREventObserver.h"
+#include "mozilla/dom/WebXRBinding.h"
 #include "mozilla/dom/WindowBinding.h"  // for FrameRequestCallback
+#include "mozilla/dom/XRSystem.h"
+#include "mozilla/dom/XRFrame.h"
 #include "mozilla/dom/ContentChild.h"
 #include "nsContentUtils.h"
 #include "mozilla/dom/GamepadManager.h"
@@ -22,8 +26,8 @@
 using namespace mozilla::dom;
 
 namespace {
-const nsTArray<RefPtr<VRManagerEventObserver>>::index_type kNoIndex =
-    nsTArray<RefPtr<VRManagerEventObserver>>::NoIndex;
+const nsTArray<RefPtr<mozilla::gfx::VRManagerEventObserver>>::index_type
+    kNoIndex = nsTArray<RefPtr<mozilla::gfx::VRManagerEventObserver>>::NoIndex;
 }  // namespace
 
 namespace mozilla {
@@ -232,6 +236,9 @@ bool VRManagerChild::RuntimeSupportsVR() const {
 bool VRManagerChild::RuntimeSupportsAR() const {
   return bool(mRuntimeCapabilities & VRDisplayCapabilityFlags::Cap_ImmersiveAR);
 }
+bool VRManagerChild::RuntimeSupportsInline() const {
+  return bool(mRuntimeCapabilities & VRDisplayCapabilityFlags::Cap_Inline);
+}
 
 mozilla::ipc::IPCResult VRManagerChild::RecvUpdateRuntimeCapabilities(
     const VRDisplayCapabilityFlags& aCapabilities) {
@@ -362,6 +369,18 @@ PVRLayerChild* VRManagerChild::CreateVRLayer(uint32_t aDisplayID,
   return SendPVRLayerConstructor(vrLayerChild, aDisplayID, aGroup);
 }
 
+void VRManagerChild::XRFrameRequest::Call(
+    const DOMHighResTimeStamp& aTimeStamp) {
+  if (mCallback) {
+    RefPtr<mozilla::dom::FrameRequestCallback> callback = mCallback;
+    callback->Call(aTimeStamp);
+  } else {
+    RefPtr<mozilla::dom::XRFrameRequestCallback> callback = mXRCallback;
+    RefPtr<mozilla::dom::XRFrame> frame = mXRFrame;
+    callback->Call(aTimeStamp, *frame);
+  }
+}
+
 nsresult VRManagerChild::ScheduleFrameRequestCallback(
     mozilla::dom::FrameRequestCallback& aCallback, int32_t* aHandle) {
   if (mFrameRequestCallbackCounter == INT32_MAX) {
@@ -370,8 +389,8 @@ nsresult VRManagerChild::ScheduleFrameRequestCallback(
   }
   int32_t newHandle = ++mFrameRequestCallbackCounter;
 
-  DebugOnly<FrameRequest*> request =
-      mFrameRequestCallbacks.AppendElement(FrameRequest(aCallback, newHandle));
+  DebugOnly<XRFrameRequest*> request = mFrameRequestCallbacks.AppendElement(
+      XRFrameRequest(aCallback, newHandle));
   NS_ASSERTION(request, "This is supposed to be infallible!");
 
   *aHandle = newHandle;
@@ -390,7 +409,7 @@ void VRManagerChild::RunFrameRequestCallbacks() {
   mozilla::TimeDuration duration = nowTime - mStartTimeStamp;
   DOMHighResTimeStamp timeStamp = duration.ToMilliseconds();
 
-  nsTArray<FrameRequest> callbacks;
+  nsTArray<XRFrameRequest> callbacks;
   callbacks.AppendElements(mFrameRequestCallbacks);
   mFrameRequestCallbacks.Clear();
   for (auto& callback : callbacks) {

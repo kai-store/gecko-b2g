@@ -78,7 +78,6 @@ browsertime-tp6m:
     raptor-subtests:
         by-app:
             fenix:
-                - aframe
                 - allrecipes
                 - amazon
                 - amazon-search
@@ -113,13 +112,19 @@ browsertime-tp6m:
     run-on-projects:
         by-raptor-test:
             amazon:
-                by-test-platform:
-                    android-hw-p2-.*aarch64.*/pgo: ["mozilla-central", "try"]
-                    default: []
+                by-app:
+                    chrome-m: []
+                    default:
+                        by-test-platform:
+                            android-hw-p2-.*aarch64.*/pgo: ["mozilla-central", "try"]
+                            default: []
             youtube:
-                by-test-platform:
-                    android-hw-p2-.*aarch64.*/pgo: ["mozilla-central", "try"]
-                    default: []
+                by-app:
+                    chrome-m: []
+                    default:
+                        by-test-platform:
+                            android-hw-p2-.*aarch64.*/pgo: ["mozilla-central", "try"]
+                            default: []
             default: []
     pageload:
         by-app:
@@ -146,11 +151,12 @@ browsertime-tp6m-profiling:
             - --browsertime
             - --gecko-profile
 
-browsertime-benchmark-speedometer:
-    description: "Browsertime speedometer on android"
+browsertime-speedometer-mobile:
+    description: "Browsertime Speedometer on Android"
     apps: ["geckoview", "fenix", "fennec"]
+    run-on-projects: ["mozilla-central", "try"]
     treeherder-symbol: Btime(sp)
     mozharness:
         extra-options:
             - --browsertime
-            - --test=raptor-speedometer
+            - --test=speedometer

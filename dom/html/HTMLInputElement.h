@@ -508,11 +508,6 @@ class HTMLInputElement final : public TextControlElement,
   bool IsDraggingRange() const { return mIsDraggingRange; }
   void SetIndeterminate(bool aValue);
 
-  void GetInputMode(nsAString& aValue);
-  void SetInputMode(const nsAString& aValue, ErrorResult& aRv) {
-    SetHTMLAttr(nsGkAtoms::inputmode, aValue, aRv);
-  }
-
   nsGenericHTMLElement* GetList() const;
 
   void GetMax(nsAString& aValue) { GetHTMLAttr(nsGkAtoms::max, aValue); }
@@ -1482,7 +1477,7 @@ class HTMLInputElement final : public TextControlElement,
    * Current value in the input box, in DateTimeValue dictionary format, see
    * HTMLInputElement.webidl for details.
    */
-  nsAutoPtr<DateTimeValue> mDateTimeInputBoxValue;
+  UniquePtr<DateTimeValue> mDateTimeInputBoxValue;
 
   /**
    * The triggering principal for the src attribute.

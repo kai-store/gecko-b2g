@@ -331,6 +331,15 @@ class AccessibilityTest : BaseSessionTest() {
             }
         })
 
+        // reset caret position
+        mainSession.evaluateJS("""
+            this.select(document.body, 0, 0);
+        """.trimIndent())
+        sessionRule.waitUntilCalled(object : EventDelegate {
+            @AssertCalled(count = 1)
+            override fun onFocused(event: AccessibilityEvent) {}
+        })
+
         mainSession.finder.find("Hell", 0)
         sessionRule.waitUntilCalled(object : EventDelegate {
             @AssertCalled(count = 1)
@@ -997,6 +1006,7 @@ class AccessibilityTest : BaseSessionTest() {
             override fun onWinStateChanged(event: AccessibilityEvent) { }
 
             @AssertCalled(count = 1)
+            @Suppress("deprecation")
             override fun onFocused(event: AccessibilityEvent) {
                 nodeId = getSourceId(event)
                 var node = createNodeInfo(nodeId)

@@ -637,7 +637,7 @@ static Maybe<TransformData> CreateAnimationData(
   // lot rarer than transforms on SVG (the frequency of which drives the need
   // for TransformReferenceBox).
   TransformReferenceBox refBox(aFrame);
-  nsRect bounds(0, 0, refBox.Width(), refBox.Height());
+  const nsRect bounds(0, 0, refBox.Width(), refBox.Height());
 
   // all data passed directly to the compositor should be in dev pixels
   int32_t devPixelsToAppUnits = aFrame->PresContext()->AppUnitsPerDevPixel();
@@ -1266,10 +1266,6 @@ void nsDisplayListBuilder::BeginFrame() {
   mInFilter = false;
   mSyncDecodeImages = false;
 
-  for (auto& renderRootRect : mRenderRootRects) {
-    renderRootRect = LayoutDeviceRect();
-  }
-
   if (!mBuildCaret) {
     return;
   }
@@ -1305,7 +1301,7 @@ void nsDisplayListBuilder::EndFrame() {
 }
 
 void nsDisplayListBuilder::MarkFrameForDisplay(nsIFrame* aFrame,
-                                               nsIFrame* aStopAtFrame) {
+                                               const nsIFrame* aStopAtFrame) {
   mFramesMarkedForDisplay.AppendElement(aFrame);
   for (nsIFrame* f = aFrame; f;
        f = nsLayoutUtils::GetParentOrPlaceholderForCrossDoc(f)) {
@@ -1325,7 +1321,7 @@ void nsDisplayListBuilder::AddFrameMarkedForDisplayIfVisible(nsIFrame* aFrame) {
 }
 
 void nsDisplayListBuilder::MarkFrameForDisplayIfVisible(
-    nsIFrame* aFrame, nsIFrame* aStopAtFrame) {
+    nsIFrame* aFrame, const nsIFrame* aStopAtFrame) {
   AddFrameMarkedForDisplayIfVisible(aFrame);
   for (nsIFrame* f = aFrame; f; f = nsLayoutUtils::GetDisplayListParent(f)) {
     if (f->ForceDescendIntoIfVisible()) {
@@ -1511,7 +1507,8 @@ bool nsDisplayListBuilder::MarkOutOfFlowFrameForDisplay(nsIFrame* aDirtyFrame,
   return true;
 }
 
-static void UnmarkFrameForDisplay(nsIFrame* aFrame, nsIFrame* aStopAtFrame) {
+static void UnmarkFrameForDisplay(nsIFrame* aFrame,
+                                  const nsIFrame* aStopAtFrame) {
   for (nsIFrame* f = aFrame; f;
        f = nsLayoutUtils::GetParentOrPlaceholderForCrossDoc(f)) {
     if (!(f->GetStateBits() & NS_FRAME_FORCE_DISPLAY_LIST_DESCEND_INTO)) {
@@ -1576,16 +1573,6 @@ uint32_t nsDisplayListBuilder::GetImageDecodeFlags() const {
   return flags;
 }
 
-void nsDisplayListBuilder::ComputeDefaultRenderRootRect(
-    LayoutDeviceIntSize aClientSize) {
-  LayoutDeviceIntRegion cutout;
-  LayoutDeviceIntRect clientRect(LayoutDeviceIntPoint(), aClientSize);
-  cutout.OrWith(clientRect);
-
-  mRenderRootRects[mozilla::wr::RenderRoot::Default] =
-      LayoutDeviceRect(cutout.GetBounds());
-}
-
 void nsDisplayListBuilder::SubtractFromVisibleRegion(nsRegion* aVisibleRegion,
                                                      const nsRegion& aRegion) {
   if (aRegion.IsEmpty()) {
@@ -1616,7 +1603,7 @@ void nsDisplayListBuilder::IncrementPresShellPaintCount(PresShell* aPresShell) {
   }
 }
 
-void nsDisplayListBuilder::EnterPresShell(nsIFrame* aReferenceFrame,
+void nsDisplayListBuilder::EnterPresShell(const nsIFrame* aReferenceFrame,
                                           bool aPointerEventsNoneDoc) {
   PresShellState* state = mPresShellStates.AppendElement();
   state->mPresShell = aReferenceFrame->PresShell();
@@ -1744,7 +1731,7 @@ static bool DisplayListIsContentful(nsDisplayList* aList) {
   return false;
 }
 
-void nsDisplayListBuilder::LeavePresShell(nsIFrame* aReferenceFrame,
+void nsDisplayListBuilder::LeavePresShell(const nsIFrame* aReferenceFrame,
                                           nsDisplayList* aPaintedContents) {
   NS_ASSERTION(
       CurrentPresShellState()->mPresShell == aReferenceFrame->PresShell(),
@@ -1819,7 +1806,7 @@ void nsDisplayListBuilder::FreeTemporaryItems() {
 }
 
 void nsDisplayListBuilder::ResetMarkedFramesForDisplayList(
-    nsIFrame* aReferenceFrame) {
+    const nsIFrame* aReferenceFrame) {
   // Unmark and pop off the frames marked for display in this pres shell.
   uint32_t firstFrameForShell =
       CurrentPresShellState()->mFirstFrameMarkedForDisplay;
@@ -3793,27 +3780,9 @@ bool nsDisplaySolidColor::CreateWebRenderCommands(
     nsDisplayListBuilder* aDisplayListBuilder) {
   LayoutDeviceRect bounds = LayoutDeviceRect::FromAppUnits(
       mBounds, mFrame->PresContext()->AppUnitsPerDevPixel());
-
-  // There is one big solid color behind everything - just split it out if it
-  // intersects multiple render roots
-  if (aBuilder.GetRenderRoot() == wr::RenderRoot::Default) {
-    for (auto renderRoot : wr::kRenderRoots) {
-      if (aBuilder.HasSubBuilder(renderRoot)) {
-        LayoutDeviceRect renderRootRect =
-            aDisplayListBuilder->GetRenderRootRect(renderRoot);
-        wr::LayoutRect intersection =
-            wr::ToLayoutRect(bounds.Intersect(renderRootRect));
-        aBuilder.SubBuilder(renderRoot)
-            .PushRect(intersection, intersection, !BackfaceIsHidden(),
-                      wr::ToColorF(ToDeviceColor(mColor)));
-      }
-    }
-  } else {
-    wr::LayoutRect r = wr::ToLayoutRect(bounds);
-
-    aBuilder.PushRect(r, r, !BackfaceIsHidden(),
-                      wr::ToColorF(ToDeviceColor(mColor)));
-  }
+  wr::LayoutRect r = wr::ToLayoutRect(bounds);
+  aBuilder.PushRect(r, r, !BackfaceIsHidden(),
+                    wr::ToColorF(ToDeviceColor(mColor)));
 
   return true;
 }
@@ -6873,13 +6842,12 @@ bool nsDisplayOwnLayer::IsScrollbarContainer() const {
          layers::ScrollbarLayerType::Container;
 }
 
-bool nsDisplayOwnLayer::IsRootScrollbarContainerWithDynamicToolbar() const {
+bool nsDisplayOwnLayer::IsRootScrollbarContainer() const {
   if (!IsScrollbarContainer()) {
     return false;
   }
 
   return mFrame->PresContext()->IsRootContentDocumentCrossProcess() &&
-         mFrame->PresContext()->HasDynamicToolbar() &&
          mScrollbarData.mTargetViewId ==
              nsLayoutUtils::ScrollIdForRootScrollFrame(mFrame->PresContext());
 }
@@ -6890,6 +6858,20 @@ bool nsDisplayOwnLayer::IsZoomingLayer() const {
 
 bool nsDisplayOwnLayer::IsFixedPositionLayer() const {
   return GetType() == DisplayItemType::TYPE_FIXED_POSITION;
+}
+
+bool nsDisplayOwnLayer::IsStickyPositionLayer() const {
+  return GetType() == DisplayItemType::TYPE_STICKY_POSITION;
+}
+
+bool nsDisplayOwnLayer::HasDynamicToolbar() const {
+  if (!mFrame->PresContext()->IsRootContentDocumentCrossProcess()) {
+    return false;
+  }
+  return mFrame->PresContext()->HasDynamicToolbar() ||
+         // For tests on Android, this pref is set to simulate the dynamic
+         // toolbar
+         StaticPrefs::apz_fixed_margin_override_enabled();
 }
 
 // nsDisplayOpacity uses layers for rendering
@@ -6917,10 +6899,11 @@ bool nsDisplayOwnLayer::CreateWebRenderCommands(
     const StackingContextHelper& aSc, RenderRootStateManager* aManager,
     nsDisplayListBuilder* aDisplayListBuilder) {
   Maybe<wr::WrAnimationProperty> prop;
-  bool needsProp =
-      aManager->LayerManager()->AsyncPanZoomEnabled() &&
-      (IsScrollThumbLayer() || IsZoomingLayer() || IsFixedPositionLayer() ||
-       IsRootScrollbarContainerWithDynamicToolbar());
+  bool needsProp = aManager->LayerManager()->AsyncPanZoomEnabled() &&
+                   (IsScrollThumbLayer() || IsZoomingLayer() ||
+                    (IsFixedPositionLayer() && HasDynamicToolbar()) ||
+                    (IsStickyPositionLayer() && HasDynamicToolbar()) ||
+                    (IsRootScrollbarContainer() && HasDynamicToolbar()));
 
   if (needsProp) {
     // APZ is enabled and this is a scroll thumb or zooming layer, so we need
@@ -6958,8 +6941,11 @@ bool nsDisplayOwnLayer::CreateWebRenderCommands(
 bool nsDisplayOwnLayer::UpdateScrollData(
     mozilla::layers::WebRenderScrollData* aData,
     mozilla::layers::WebRenderLayerScrollData* aLayerData) {
-  bool isRelevantToApz = (IsScrollThumbLayer() || IsScrollbarContainer() ||
-                          IsZoomingLayer() || IsFixedPositionLayer());
+  bool isRelevantToApz =
+      (IsScrollThumbLayer() || IsScrollbarContainer() || IsZoomingLayer() ||
+       (IsFixedPositionLayer() && HasDynamicToolbar()) ||
+       (IsStickyPositionLayer() && HasDynamicToolbar()));
+
   if (!isRelevantToApz) {
     return false;
   }
@@ -6973,8 +6959,13 @@ bool nsDisplayOwnLayer::UpdateScrollData(
     return true;
   }
 
-  if (IsFixedPositionLayer()) {
+  if (IsFixedPositionLayer() && HasDynamicToolbar()) {
     aLayerData->SetFixedPositionAnimationId(mWrAnimationId);
+    return true;
+  }
+
+  if (IsStickyPositionLayer() && HasDynamicToolbar()) {
+    aLayerData->SetStickyPositionAnimationId(mWrAnimationId);
     return true;
   }
 
@@ -6982,7 +6973,7 @@ bool nsDisplayOwnLayer::UpdateScrollData(
 
   aLayerData->SetScrollbarData(mScrollbarData);
 
-  if (IsRootScrollbarContainerWithDynamicToolbar()) {
+  if (IsRootScrollbarContainer() && HasDynamicToolbar()) {
     aLayerData->SetScrollbarAnimationId(mWrAnimationId);
     return true;
   }
@@ -7324,7 +7315,8 @@ bool nsDisplayFixedPosition::UpdateScrollData(
     }
     aLayerData->SetFixedPositionScrollContainerId(GetScrollTargetId());
   }
-  return nsDisplayOwnLayer::UpdateScrollData(aData, aLayerData) | true;
+  nsDisplayOwnLayer::UpdateScrollData(aData, aLayerData);
+  return true;
 }
 
 void nsDisplayFixedPosition::WriteDebugInfo(std::stringstream& aStream) {
@@ -7390,9 +7382,10 @@ nsDisplayTableFixedPosition::CreateForFixedBackground(
 nsDisplayStickyPosition::nsDisplayStickyPosition(
     nsDisplayListBuilder* aBuilder, nsIFrame* aFrame, nsDisplayList* aList,
     const ActiveScrolledRoot* aActiveScrolledRoot,
-    const ActiveScrolledRoot* aContainerASR)
+    const ActiveScrolledRoot* aContainerASR, bool aClippedToDisplayPort)
     : nsDisplayOwnLayer(aBuilder, aFrame, aList, aActiveScrolledRoot),
-      mContainerASR(aContainerASR) {
+      mContainerASR(aContainerASR),
+      mClippedToDisplayPort(aClippedToDisplayPort) {
   MOZ_COUNT_CTOR(nsDisplayStickyPosition);
 }
 
@@ -7444,23 +7437,11 @@ already_AddRefed<Layer> nsDisplayStickyPosition::BuildLayer(
       stickyScrollContainer->ScrollFrame()->GetScrolledFrame()->GetContent());
 
   float factor = presContext->AppUnitsPerDevPixel();
-  nsRectAbsolute outer;
-  nsRectAbsolute inner;
-  stickyScrollContainer->GetScrollRanges(mFrame, &outer, &inner);
-  LayerRectAbsolute stickyOuter(
-      NSAppUnitsToFloatPixels(outer.X(), factor) * aContainerParameters.mXScale,
-      NSAppUnitsToFloatPixels(outer.Y(), factor) * aContainerParameters.mYScale,
-      NSAppUnitsToFloatPixels(outer.XMost(), factor) *
-          aContainerParameters.mXScale,
-      NSAppUnitsToFloatPixels(outer.YMost(), factor) *
-          aContainerParameters.mYScale);
-  LayerRectAbsolute stickyInner(
-      NSAppUnitsToFloatPixels(inner.X(), factor) * aContainerParameters.mXScale,
-      NSAppUnitsToFloatPixels(inner.Y(), factor) * aContainerParameters.mYScale,
-      NSAppUnitsToFloatPixels(inner.XMost(), factor) *
-          aContainerParameters.mXScale,
-      NSAppUnitsToFloatPixels(inner.YMost(), factor) *
-          aContainerParameters.mYScale);
+  LayerRectAbsolute stickyOuter;
+  LayerRectAbsolute stickyInner;
+  CalculateLayerScrollRanges(
+      stickyScrollContainer, factor, aContainerParameters.mXScale,
+      aContainerParameters.mYScale, stickyOuter, stickyInner);
   layer->SetStickyPositionData(scrollId, stickyOuter, stickyInner);
 
   return layer.forget();
@@ -7480,11 +7461,7 @@ static nscoord DistanceToRange(nscoord min, nscoord max) {
   return 0;
 }
 
-bool nsDisplayStickyPosition::CreateWebRenderCommands(
-    mozilla::wr::DisplayListBuilder& aBuilder,
-    mozilla::wr::IpcResourceUpdateQueue& aResources,
-    const StackingContextHelper& aSc, RenderRootStateManager* aManager,
-    nsDisplayListBuilder* aDisplayListBuilder) {
+StickyScrollContainer* nsDisplayStickyPosition::GetStickyScrollContainer() {
   StickyScrollContainer* stickyScrollContainer =
       StickyScrollContainer::GetStickyScrollContainerForFrame(mFrame);
   if (stickyScrollContainer) {
@@ -7504,6 +7481,15 @@ bool nsDisplayStickyPosition::CreateWebRenderCommands(
       stickyScrollContainer = nullptr;
     }
   }
+  return stickyScrollContainer;
+}
+
+bool nsDisplayStickyPosition::CreateWebRenderCommands(
+    mozilla::wr::DisplayListBuilder& aBuilder,
+    mozilla::wr::IpcResourceUpdateQueue& aResources,
+    const StackingContextHelper& aSc, RenderRootStateManager* aManager,
+    nsDisplayListBuilder* aDisplayListBuilder) {
+  StickyScrollContainer* stickyScrollContainer = GetStickyScrollContainer();
 
   Maybe<wr::SpaceAndClipChainHelper> saccHelper;
 
@@ -7639,7 +7625,7 @@ bool nsDisplayStickyPosition::CreateWebRenderCommands(
         wr::WrStackingContextClip::ClipChain(aBuilder.CurrentClipChainId());
     StackingContextHelper sc(aSc, GetActiveScrolledRoot(), mFrame, this,
                              aBuilder, params);
-    nsDisplayWrapList::CreateWebRenderCommands(aBuilder, aResources, sc,
+    nsDisplayOwnLayer::CreateWebRenderCommands(aBuilder, aResources, sc,
                                                aManager, aDisplayListBuilder);
   }
 
@@ -7648,6 +7634,62 @@ bool nsDisplayStickyPosition::CreateWebRenderCommands(
   }
 
   return true;
+}
+
+void nsDisplayStickyPosition::CalculateLayerScrollRanges(
+    StickyScrollContainer* aStickyScrollContainer, float aAppUnitsPerDevPixel,
+    float aScaleX, float aScaleY, LayerRectAbsolute& aStickyOuter,
+    LayerRectAbsolute& aStickyInner) {
+  nsRectAbsolute outer;
+  nsRectAbsolute inner;
+  aStickyScrollContainer->GetScrollRanges(mFrame, &outer, &inner);
+  aStickyOuter.SetBox(
+      NSAppUnitsToFloatPixels(outer.X(), aAppUnitsPerDevPixel) * aScaleX,
+      NSAppUnitsToFloatPixels(outer.Y(), aAppUnitsPerDevPixel) * aScaleY,
+      NSAppUnitsToFloatPixels(outer.XMost(), aAppUnitsPerDevPixel) * aScaleX,
+      NSAppUnitsToFloatPixels(outer.YMost(), aAppUnitsPerDevPixel) * aScaleY);
+  aStickyInner.SetBox(
+      NSAppUnitsToFloatPixels(inner.X(), aAppUnitsPerDevPixel) * aScaleX,
+      NSAppUnitsToFloatPixels(inner.Y(), aAppUnitsPerDevPixel) * aScaleY,
+      NSAppUnitsToFloatPixels(inner.XMost(), aAppUnitsPerDevPixel) * aScaleX,
+      NSAppUnitsToFloatPixels(inner.YMost(), aAppUnitsPerDevPixel) * aScaleY);
+}
+
+bool nsDisplayStickyPosition::UpdateScrollData(
+    mozilla::layers::WebRenderScrollData* aData,
+    mozilla::layers::WebRenderLayerScrollData* aLayerData) {
+  bool hasDynamicToolbar = HasDynamicToolbar();
+  if (aLayerData && hasDynamicToolbar) {
+    StickyScrollContainer* stickyScrollContainer = GetStickyScrollContainer();
+    if (stickyScrollContainer) {
+      float auPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
+      float cumulativeResolution =
+          mFrame->PresShell()->GetCumulativeResolution();
+      LayerRectAbsolute stickyOuter;
+      LayerRectAbsolute stickyInner;
+      CalculateLayerScrollRanges(stickyScrollContainer, auPerDevPixel,
+                                 cumulativeResolution, cumulativeResolution,
+                                 stickyOuter, stickyInner);
+      aLayerData->SetStickyScrollRangeOuter(stickyOuter);
+      aLayerData->SetStickyScrollRangeInner(stickyInner);
+
+      SideBits sides =
+          nsLayoutUtils::GetSideBitsForFixedPositionContent(mFrame);
+      aLayerData->SetFixedPositionSides(sides);
+
+      ViewID scrollId =
+          nsLayoutUtils::FindOrCreateIDFor(stickyScrollContainer->ScrollFrame()
+                                               ->GetScrolledFrame()
+                                               ->GetContent());
+      aLayerData->SetStickyPositionScrollContainerId(scrollId);
+    }
+  }
+  // Return true if either there is a dynamic toolbar affecting this sticky
+  // item or the OwnLayer base implementation returns true for some other
+  // reason.
+  bool ret = hasDynamicToolbar;
+  ret |= nsDisplayOwnLayer::UpdateScrollData(aData, aLayerData);
+  return ret;
 }
 
 nsDisplayScrollInfoLayer::nsDisplayScrollInfoLayer(
@@ -8107,10 +8149,8 @@ Matrix4x4 nsDisplayTransform::GetResultingTransformMatrix(
 Matrix4x4 nsDisplayTransform::GetResultingTransformMatrix(
     const nsIFrame* aFrame, const nsPoint& aOrigin, float aAppUnitsPerPixel,
     uint32_t aFlags) {
-  // mRect before calling FinishAndStoreOverflow so we don't need the override.
   TransformReferenceBox refBox(aFrame);
   FrameTransformProperties props(aFrame, refBox, aAppUnitsPerPixel);
-
   return GetResultingTransformMatrixInternal(props, refBox, aOrigin,
                                              aAppUnitsPerPixel, aFlags);
 }
@@ -8213,7 +8253,7 @@ Matrix4x4 nsDisplayTransform::GetResultingTransformMatrixInternal(
                                    aAppUnitsPerPixel, shouldRound);
     }
     Matrix4x4 parent = GetResultingTransformMatrixInternal(
-        props, aRefBox, nsPoint(0, 0), aAppUnitsPerPixel, flags);
+        props, refBox, nsPoint(0, 0), aAppUnitsPerPixel, flags);
     result = result * parent;
   }
 

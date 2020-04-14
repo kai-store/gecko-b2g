@@ -20,6 +20,7 @@
 #include "js/CharacterEncoding.h"
 #include "js/Class.h"
 #include "js/ErrorReport.h"
+#include "js/Exception.h"
 #include "js/HeapAPI.h"
 #include "js/TypeDecls.h"
 #include "js/Utility.h"
@@ -44,6 +45,8 @@ struct JSJitInfo;
 namespace JS {
 template <class T>
 class Heap;
+
+class ExceptionStack;
 } /* namespace JS */
 
 namespace js {
@@ -155,7 +158,6 @@ enum {
   JS_TELEMETRY_GC_MMU_50,
   JS_TELEMETRY_GC_RESET,
   JS_TELEMETRY_GC_RESET_REASON,
-  JS_TELEMETRY_GC_INCREMENTAL_DISABLED,
   JS_TELEMETRY_GC_NON_INCREMENTAL,
   JS_TELEMETRY_GC_NON_INCREMENTAL_REASON,
   JS_TELEMETRY_GC_SCC_SWEEP_TOTAL_MS,
@@ -1334,6 +1336,9 @@ struct MOZ_STACK_CLASS JS_FRIEND_API ErrorReport {
   bool init(JSContext* cx, JS::HandleValue exn,
             SniffingBehavior sniffingBehavior,
             JS::HandleObject fallbackStack = nullptr);
+
+  bool init(JSContext* cx, const JS::ExceptionStack& exnStack,
+            SniffingBehavior sniffingBehavior);
 
   JSErrorReport* report() { return reportp; }
 
@@ -2694,9 +2699,7 @@ extern JS_FRIEND_API void SetPerformanceHint(JSContext* cx,
 
 } /* namespace gc */
 
-#ifdef DEBUG
 extern JS_FRIEND_API JS::Zone* GetObjectZoneFromAnyThread(JSObject* obj);
-#endif
 
 } /* namespace js */
 

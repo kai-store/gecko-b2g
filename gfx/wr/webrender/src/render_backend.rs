@@ -33,9 +33,9 @@ use crate::internal_types::{DebugOutput, FastHashMap, FastHashSet, RenderedDocum
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use crate::picture::{RetainedTiles, TileCacheLogger};
 use crate::prim_store::{PrimitiveScratchBuffer, PrimitiveInstance};
-use crate::prim_store::{PrimitiveInstanceKind, PrimTemplateCommonData};
+use crate::prim_store::{PrimitiveInstanceKind, PrimTemplateCommonData, PrimitiveStore};
 use crate::prim_store::interned::*;
-use crate::profiler::{BackendProfileCounters, IpcProfileCounters, ResourceProfileCounters};
+use crate::profiler::{BackendProfileCounters, ResourceProfileCounters};
 use crate::record::ApiRecordingReceiver;
 use crate::record::LogRecorder;
 use crate::render_task_graph::RenderTaskGraphCounters;
@@ -271,6 +271,53 @@ macro_rules! declare_data_stores {
 enumerate_interners!(declare_data_stores);
 
 impl DataStores {
+    /// Returns the local rect for a primitive. For most primitives, this is
+    /// stored in the template. For pictures, this is stored inside the picture
+    /// primitive instance itself, since this is determined during frame building.
+    pub fn get_local_prim_rect(
+        &self,
+        prim_instance: &PrimitiveInstance,
+        prim_store: &PrimitiveStore,
+    ) -> LayoutRect {
+        match prim_instance.kind {
+            PrimitiveInstanceKind::Picture { pic_index, .. } => {
+                let pic = &prim_store.pictures[pic_index.0];
+                pic.precise_local_rect
+            }
+            PrimitiveInstanceKind::PushClipChain |
+            PrimitiveInstanceKind::PopClipChain => {
+                unreachable!();
+            }
+            _ => {
+                LayoutRect::new(
+                    prim_instance.prim_origin,
+                    self.as_common_data(prim_instance).prim_size,
+                )
+            }
+        }
+    }
+
+    /// Returns true if this primitive might need repition.
+    // TODO(gw): This seems like the wrong place for this - maybe this flag should
+    //           not be in the common prim template data?
+    pub fn prim_may_need_repetition(
+        &self,
+        prim_instance: &PrimitiveInstance,
+    ) -> bool {
+        match prim_instance.kind {
+            PrimitiveInstanceKind::Picture { .. } => {
+                false
+            }
+            PrimitiveInstanceKind::PushClipChain |
+            PrimitiveInstanceKind::PopClipChain => {
+                unreachable!();
+            }
+            _ => {
+                self.as_common_data(prim_instance).may_need_repetition
+            }
+        }
+    }
+
     pub fn as_common_data(
         &self,
         prim_inst: &PrimitiveInstance
@@ -301,9 +348,8 @@ impl DataStores {
                 let prim_data = &self.normal_border[data_handle];
                 &prim_data.common
             }
-            PrimitiveInstanceKind::Picture { data_handle, .. } => {
-                let prim_data = &self.picture[data_handle];
-                &prim_data.common
+            PrimitiveInstanceKind::Picture { .. } => {
+                panic!("BUG: picture prims don't have common data!");
             }
             PrimitiveInstanceKind::RadialGradient { data_handle, .. } => {
                 let prim_data = &self.radial_grad[data_handle];
@@ -786,7 +832,6 @@ impl RenderBackend {
         message: SceneMsg,
         frame_counter: u32,
         txn: &mut Transaction,
-        ipc_profile_counters: &mut IpcProfileCounters,
     ) {
         let doc = self.documents.get_mut(&document_id).expect("No document?");
 
@@ -845,9 +890,8 @@ impl RenderBackend {
                 }
 
                 let display_list_len = built_display_list.data().len();
-                let (builder_start_time, builder_finish_time, send_start_time) =
+                let (builder_start_time_ns, builder_end_time_ns, send_time_ns) =
                     built_display_list.times();
-                let display_list_received_time = precise_time_ns();
 
                 txn.display_list_updates.push(DisplayListUpdate {
                     built_display_list,
@@ -856,21 +900,16 @@ impl RenderBackend {
                     background,
                     viewport_size,
                     content_size,
+                    timings: TransactionTimings {
+                        builder_start_time_ns,
+                        builder_end_time_ns,
+                        send_time_ns,
+                        scene_build_start_time_ns: 0,
+                        scene_build_end_time_ns: 0,
+                        blob_rasterization_end_time_ns: 0,
+                        display_list_len,
+                    },
                 });
-
-                // Note: this isn't quite right as auxiliary values will be
-                // pulled out somewhere in the prim_store, but aux values are
-                // really simple and cheap to access, so it's not a big deal.
-                let display_list_consumed_time = precise_time_ns();
-
-                ipc_profile_counters.set(
-                    builder_start_time,
-                    builder_finish_time,
-                    send_start_time,
-                    display_list_received_time,
-                    display_list_consumed_time,
-                    display_list_len,
-                );
             }
             SceneMsg::SetRootPipeline(pipeline_id) => {
                 profile_scope!("SetRootPipeline");
@@ -917,10 +956,19 @@ impl RenderBackend {
                         for mut txn in txns.drain(..) {
                             let has_built_scene = txn.built_scene.is_some();
 
-                            if has_built_scene {
-                                let scene_build_time =
-                                    txn.scene_build_end_time - txn.scene_build_start_time;
-                                profile_counters.scene_build_time.set(scene_build_time);
+                            if let Some(timings) = txn.timings {
+                                if has_built_scene {
+                                    profile_counters.scene_changed = true;
+                                }
+
+                                profile_counters.txn.set(
+                                    timings.builder_start_time_ns,
+                                    timings.builder_end_time_ns,
+                                    timings.send_time_ns,
+                                    timings.scene_build_start_time_ns,
+                                    timings.scene_build_end_time_ns,
+                                    timings.display_list_len,
+                                );
                             }
 
                             if let Some(doc) = self.documents.get_mut(&txn.document_id) {
@@ -1402,7 +1450,6 @@ impl RenderBackend {
                         scene_msg,
                         *frame_counter,
                         &mut txn,
-                        &mut profile_counters.ipc,
                     )
                 }
 

@@ -260,7 +260,7 @@ class Opcode {
 };
 
 // A PackedTypeCode represents a TypeCode paired with a refTypeIndex (valid only
-// for TypeCode::Ref).  PackedTypeCode is guaranteed to be POD.  The TypeCode
+// for TypeCode::OptRef).  PackedTypeCode is guaranteed to be POD.  The TypeCode
 // spans the full range of type codes including the specialized AnyRef, FuncRef,
 // NullRef.
 //
@@ -279,8 +279,8 @@ const uint32_t NoRefTypeIndex = 0x3FFFFF;  //   with PackedTypeCode
 
 static inline PackedTypeCode PackTypeCode(TypeCode tc, uint32_t refTypeIndex) {
   MOZ_ASSERT(uint32_t(tc) <= 0xFF);
-  MOZ_ASSERT_IF(tc != TypeCode::Ref, refTypeIndex == NoRefTypeIndex);
-  MOZ_ASSERT_IF(tc == TypeCode::Ref, refTypeIndex <= MaxTypes);
+  MOZ_ASSERT_IF(tc != TypeCode::OptRef, refTypeIndex == NoRefTypeIndex);
+  MOZ_ASSERT_IF(tc == TypeCode::OptRef, refTypeIndex <= MaxTypes);
   // A PackedTypeCode should be representable in a single word, so in the
   // smallest case, 32 bits.  However sometimes 2 bits of the word may be taken
   // by a pointer tag; for that reason, limit to 30 bits; and then there's the
@@ -315,7 +315,7 @@ static inline TypeCode UnpackTypeCodeType(PackedTypeCode ptc) {
 }
 
 static inline uint32_t UnpackTypeCodeIndex(PackedTypeCode ptc) {
-  MOZ_ASSERT(UnpackTypeCodeType(ptc) == TypeCode::Ref);
+  MOZ_ASSERT(UnpackTypeCodeType(ptc) == TypeCode::OptRef);
   return uint32_t(ptc) >> 8;
 }
 
@@ -323,11 +323,11 @@ static inline uint32_t UnpackTypeCodeIndexUnchecked(PackedTypeCode ptc) {
   return uint32_t(ptc) >> 8;
 }
 
-// Return the TypeCode, but return TypeCode::Ref for any reference type.
+// Return the TypeCode, but return TypeCode::OptRef for any reference type.
 //
 // This function is very, very hot, hence what would normally be a switch on the
-// value `c` to map the reference types to TypeCode::Ref has been distilled into
-// a simple comparison; this is fastest.  Should type codes become too
+// value `c` to map the reference types to TypeCode::OptRef has been distilled
+// into a simple comparison; this is fastest.  Should type codes become too
 // complicated for this to work then a lookup table also has better performance
 // than a switch.
 //
@@ -338,11 +338,11 @@ static inline uint32_t UnpackTypeCodeIndexUnchecked(PackedTypeCode ptc) {
 
 static inline TypeCode UnpackTypeCodeTypeAbstracted(PackedTypeCode ptc) {
   TypeCode c = UnpackTypeCodeType(ptc);
-  return c < LowestPrimitiveTypeCode ? TypeCode::Ref : c;
+  return c < LowestPrimitiveTypeCode ? TypeCode::OptRef : c;
 }
 
 static inline bool IsReferenceType(PackedTypeCode ptc) {
-  return UnpackTypeCodeTypeAbstracted(ptc) == TypeCode::Ref;
+  return UnpackTypeCodeTypeAbstracted(ptc) == TypeCode::OptRef;
 }
 
 // The RefType carries more information about types t for which t.isReference()
@@ -354,7 +354,7 @@ class RefType {
     Null = uint8_t(TypeCode::NullRef),
     Any = uint8_t(TypeCode::AnyRef),
     Func = uint8_t(TypeCode::FuncRef),
-    TypeIndex = uint8_t(TypeCode::Ref)
+    TypeIndex = uint8_t(TypeCode::OptRef)
   };
 
  private:
@@ -368,7 +368,7 @@ class RefType {
       case TypeCode::AnyRef:
         MOZ_ASSERT(UnpackTypeCodeIndexUnchecked(ptc_) == NoRefTypeIndex);
         return true;
-      case TypeCode::Ref:
+      case TypeCode::OptRef:
         MOZ_ASSERT(UnpackTypeCodeIndexUnchecked(ptc_) != NoRefTypeIndex);
         return true;
       default:
@@ -383,7 +383,7 @@ class RefType {
 
   // We keep this private since all sorts of values coerce to uint32_t.
   explicit RefType(uint32_t refTypeIndex)
-      : ptc_(PackTypeCode(TypeCode::Ref, refTypeIndex)) {
+      : ptc_(PackTypeCode(TypeCode::OptRef, refTypeIndex)) {
     MOZ_ASSERT(isValid());
   }
 
@@ -391,7 +391,7 @@ class RefType {
   explicit RefType(PackedTypeCode ptc) : ptc_(ptc) { MOZ_ASSERT(isValid()); }
 
   static RefType fromTypeCode(TypeCode tc) {
-    MOZ_ASSERT(tc != TypeCode::Ref);
+    MOZ_ASSERT(tc != TypeCode::OptRef);
     return RefType(Kind(tc));
   }
 
@@ -430,7 +430,7 @@ class ValType {
       case TypeCode::AnyRef:
       case TypeCode::FuncRef:
       case TypeCode::NullRef:
-      case TypeCode::Ref:
+      case TypeCode::OptRef:
         return true;
       default:
         return false;
@@ -444,12 +444,12 @@ class ValType {
     I64 = uint8_t(TypeCode::I64),
     F32 = uint8_t(TypeCode::F32),
     F64 = uint8_t(TypeCode::F64),
-    Ref = uint8_t(TypeCode::Ref),
+    Ref = uint8_t(TypeCode::OptRef),
   };
 
  private:
   explicit ValType(TypeCode c) : tc_(PackTypeCode(c)) {
-    MOZ_ASSERT(c != TypeCode::Ref);
+    MOZ_ASSERT(c != TypeCode::OptRef);
     MOZ_ASSERT(isValid());
   }
 
@@ -541,7 +541,7 @@ class ValType {
 
   bool isTypeIndex() const {
     MOZ_ASSERT(isValid());
-    return UnpackTypeCodeType(tc_) == TypeCode::Ref;
+    return UnpackTypeCodeType(tc_) == TypeCode::OptRef;
   }
 
   bool isReference() const {
@@ -949,6 +949,33 @@ class LitVal {
  public:
   LitVal() : type_(), u{} {}
 
+  explicit LitVal(ValType type) : type_(type) {
+    switch (type.kind()) {
+      case ValType::Kind::I32: {
+        u.i32_ = 0;
+        break;
+      }
+      case ValType::Kind::I64: {
+        u.i64_ = 0;
+        break;
+      }
+      case ValType::Kind::F32: {
+        u.f32_ = 0;
+        break;
+      }
+      case ValType::Kind::F64: {
+        u.f64_ = 0;
+        break;
+      }
+      case ValType::Kind::Ref: {
+        u.ref_ = AnyRef::null();
+        break;
+      }
+      default:
+        MOZ_CRASH();
+    }
+  }
+
   explicit LitVal(uint32_t i32) : type_(ValType::I32) { u.i32_ = i32; }
   explicit LitVal(uint64_t i64) : type_(ValType::I64) { u.i64_ = i64; }
 
@@ -995,6 +1022,7 @@ class LitVal {
 class MOZ_NON_PARAM Val : public LitVal {
  public:
   Val() : LitVal() {}
+  explicit Val(ValType type) : LitVal(type) {}
   explicit Val(const LitVal& val);
   explicit Val(uint32_t i32) : LitVal(i32) {}
   explicit Val(uint64_t i64) : LitVal(i64) {}
@@ -1088,14 +1116,14 @@ class FuncType {
     }
     return false;
   }
-  // Entry from JS to wasm is currently unimplemented for functions that return
-  // multiple values.
-  bool temporarilyUnsupportedResultCountForEntry() const {
+  // Entry from JS to wasm via the JIT is currently unimplemented for
+  // functions that return multiple values.
+  bool temporarilyUnsupportedResultCountForJitEntry() const {
     return results().length() > 1;
   }
   // Calls out from wasm to JS that return multiple values is currently
   // unsupported.
-  bool temporarilyUnsupportedResultCountForExit() const {
+  bool temporarilyUnsupportedResultCountForJitExit() const {
     return results().length() > 1;
   }
   // For JS->wasm jit entries, AnyRef parameters and returns are allowed,
@@ -1281,7 +1309,7 @@ typedef Vector<StructType, 0, SystemAllocPolicy> StructTypeVector;
 
 class InitExpr {
  public:
-  enum class Kind { Constant, GetGlobal };
+  enum class Kind { Constant, GetGlobal, RefFunc };
 
  private:
   // Note: all this private data is currently (de)serialized via memcpy().
@@ -1292,18 +1320,33 @@ class InitExpr {
       uint32_t index_;
       ValType type_;
     } global;
+    uint32_t refFuncIndex_;
     U() : global{} {}
   } u;
 
  public:
   InitExpr() = default;
 
-  explicit InitExpr(LitVal val) : kind_(Kind::Constant) { u.val_ = val; }
+  static InitExpr fromConstant(LitVal val) {
+    InitExpr expr;
+    expr.kind_ = Kind::Constant;
+    expr.u.val_ = val;
+    return expr;
+  }
 
-  explicit InitExpr(uint32_t globalIndex, ValType type)
-      : kind_(Kind::GetGlobal) {
-    u.global.index_ = globalIndex;
-    u.global.type_ = type;
+  static InitExpr fromGetGlobal(uint32_t globalIndex, ValType type) {
+    InitExpr expr;
+    expr.kind_ = Kind::GetGlobal;
+    expr.u.global.index_ = globalIndex;
+    expr.u.global.type_ = type;
+    return expr;
+  }
+
+  static InitExpr fromRefFunc(uint32_t refFuncIndex) {
+    InitExpr expr;
+    expr.kind_ = Kind::RefFunc;
+    expr.u.refFuncIndex_ = refFuncIndex;
+    return expr;
   }
 
   Kind kind() const { return kind_; }
@@ -1319,12 +1362,19 @@ class InitExpr {
     return u.global.index_;
   }
 
+  uint32_t refFuncIndex() const {
+    MOZ_ASSERT(kind() == Kind::RefFunc);
+    return u.refFuncIndex_;
+  }
+
   ValType type() const {
     switch (kind()) {
       case Kind::Constant:
         return u.val_.type();
       case Kind::GetGlobal:
         return u.global.type_;
+      case Kind::RefFunc:
+        return ValType(RefType::func());
     }
     MOZ_CRASH("unexpected initExpr type");
   }
@@ -2278,7 +2328,7 @@ enum class SymbolicAddress {
   TableInit,
   TableSet,
   TableSize,
-  FuncRef,
+  RefFunc,
   PreBarrierFiltering,
   PostBarrier,
   PostBarrierFiltering,

@@ -98,6 +98,7 @@
 #include "js/ContextOptions.h"  // JS::ContextOptions{,Ref}
 #include "js/Debug.h"
 #include "js/Equality.h"                 // JS::SameValue
+#include "js/Exception.h"                // JS::StealPendingExceptionStack
 #include "js/experimental/SourceHook.h"  // js::{Set,Forget,}SourceHook
 #include "js/GCVector.h"
 #include "js/Initialization.h"
@@ -3059,7 +3060,7 @@ static MOZ_MUST_USE bool SrcNotes(JSContext* cx, HandleScript script,
 
       case SrcNoteType::ColSpan:
         colspan = SrcNote::ColSpan::getSpan(sn);
-        if (!sp->jsprintf("%d", colspan)) {
+        if (!sp->jsprintf("%u", colspan)) {
           return false;
         }
         break;
@@ -3815,8 +3816,10 @@ static bool CopyErrorReportToObject(JSContext* cx, JSErrorReport* report,
 static bool CreateErrorReport(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
+  // We don't have a stack here, so just initialize with null.
+  JS::ExceptionStack exnStack(cx, args.get(0), nullptr);
   js::ErrorReport report(cx);
-  if (!report.init(cx, args.get(0), js::ErrorReport::WithSideEffects)) {
+  if (!report.init(cx, exnStack, js::ErrorReport::WithSideEffects)) {
     return false;
   }
 
@@ -9579,15 +9582,12 @@ js::shell::AutoReportException::~AutoReportException() {
   }
 
   // Get exception object and stack before printing and clearing exception.
-  RootedValue exn(cx);
-  (void)JS_GetPendingException(cx, &exn);
-  RootedObject stack(cx, GetPendingExceptionStack(cx));
-
-  JS_ClearPendingException(cx);
+  JS::ExceptionStack exnStack(cx);
+  JS::StealPendingExceptionStack(cx, &exnStack);
 
   ShellContext* sc = GetShellContext(cx);
   js::ErrorReport report(cx);
-  if (!report.init(cx, exn, js::ErrorReport::WithSideEffects, stack)) {
+  if (!report.init(cx, exnStack, js::ErrorReport::WithSideEffects)) {
     fprintf(stderr, "out of memory initializing ErrorReport\n");
     fflush(stderr);
     JS_ClearPendingException(cx);
@@ -9600,7 +9600,7 @@ js::shell::AutoReportException::~AutoReportException() {
   PrintError(cx, fp, report.toStringResult(), report.report(), reportWarnings);
   JS_ClearPendingException(cx);
 
-  if (!PrintStackTrace(cx, stack)) {
+  if (!PrintStackTrace(cx, exnStack.stack())) {
     fputs("(Unable to print stack trace)\n", fp);
     JS_ClearPendingException(cx);
   }
@@ -10635,7 +10635,10 @@ static bool SetContextOptions(JSContext* cx, const OptionParser& op) {
   if (op.getBoolOption("no-ti")) {
     jit::JitOptions.typeInference = false;
   }
-  if (op.getBoolOption("warp")) {
+  if (op.getBoolOption("no-warp")) {
+    MOZ_ASSERT(!jit::JitOptions.warpBuilder,
+               "WarpBuilder is disabled by default");
+  } else if (op.getBoolOption("warp")) {
     // WarpBuilder requires TI to be disabled.
     jit::JitOptions.typeInference = false;
     jit::JitOptions.warpBuilder = true;
@@ -11164,6 +11167,7 @@ int main(int argc, char** argv, char** envp) {
       !op.addBoolOption('\0', "no-ti", "Disable Type Inference") ||
       !op.addBoolOption('\0', "warp", "Use WarpBuilder as MIR builder") ||
 #endif
+      !op.addBoolOption('\0', "no-warp", "Disable WarpBuilder (default)") ||
       !op.addBoolOption('\0', "no-asmjs", "Disable asm.js compilation") ||
       !op.addStringOption(
           '\0', "wasm-compiler", "[option]",

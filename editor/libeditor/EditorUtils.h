@@ -14,12 +14,14 @@
 #include "mozilla/RangeBoundary.h"
 #include "mozilla/dom/Selection.h"
 #include "mozilla/dom/StaticRange.h"
+#include "nsAtom.h"
 #include "nsCOMPtr.h"
+#include "nsContentUtils.h"
+#include "nscore.h"
 #include "nsDebug.h"
 #include "nsRange.h"
-#include "nscore.h"
+#include "nsString.h"
 
-class nsAtom;
 class nsISimpleEnumerator;
 class nsITransferable;
 
@@ -700,7 +702,7 @@ class MOZ_RAII AutoTransactionBatchExternal final {
       EditorBase& aEditorBase MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : mEditorBase(aEditorBase) {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-    mEditorBase.BeginTransaction();
+    MOZ_KnownLive(mEditorBase).BeginTransaction();
   }
 
   MOZ_CAN_RUN_SCRIPT ~AutoTransactionBatchExternal() {
@@ -802,6 +804,22 @@ class EditorUtils final {
   static void MaskString(nsString& aString, dom::Text* aText,
                          uint32_t aStartOffsetInString,
                          uint32_t aStartOffsetInText);
+
+  static nsStaticAtom* GetTagNameAtom(const nsAString& aTagName) {
+    if (aTagName.IsEmpty()) {
+      return nullptr;
+    }
+    nsAutoString lowerTagName;
+    nsContentUtils::ASCIIToLower(aTagName, lowerTagName);
+    return NS_GetStaticAtom(lowerTagName);
+  }
+
+  static nsStaticAtom* GetAttributeAtom(const nsAString& aAttribute) {
+    if (aAttribute.IsEmpty()) {
+      return nullptr;  // Don't use nsGkAtoms::_empty for attribute.
+    }
+    return NS_GetStaticAtom(aAttribute);
+  }
 };
 
 }  // namespace mozilla

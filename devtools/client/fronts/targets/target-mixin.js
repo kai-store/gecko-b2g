@@ -460,7 +460,7 @@ function TargetMixin(parentClass) {
         try {
           await this.detach();
         } catch (e) {
-          console.warn("Error while detaching target:", e);
+          this.logDetachError(e);
         }
       }
 
@@ -468,6 +468,32 @@ function TargetMixin(parentClass) {
       super.destroy();
 
       this._cleanup();
+    }
+
+    /**
+     * Detach can fail under regular circumstances, if the target was already
+     * destroyed on the server side. All target fronts should handle detach
+     * error logging in similar ways so this might be used by subclasses
+     * with custom detach() implementations.
+     *
+     * @param {Error} e
+     *        The real error object.
+     * @param {String} targetType
+     *        The type of the target front ("worker", "browsing-context", ...)
+     */
+    logDetachError(e, targetType) {
+      const noSuchActorError = e?.message.includes("noSuchActor");
+
+      // Silence exceptions for already destroyed actors, ie noSuchActor errors.
+      if (noSuchActorError) {
+        return;
+      }
+
+      // Properly log any other error.
+      const message = targetType
+        ? `Error while detaching the ${targetType} target:`
+        : "Error while detaching target:";
+      console.warn(message, e);
     }
 
     /**
@@ -488,6 +514,12 @@ function TargetMixin(parentClass) {
     toString() {
       const id = this.targetForm ? this.targetForm.actor : null;
       return `Target:${id}`;
+    }
+
+    dumpPools() {
+      // NOTE: dumpPools is defined in the Thread actor to avoid
+      // adding it to multiple target specs and actors.
+      return this.threadFront.dumpPools();
     }
 
     /**

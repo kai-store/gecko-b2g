@@ -161,6 +161,7 @@ class XPCShellTestThread(Thread):
         self.interactive = kwargs.get('interactive')
         self.prefsFile = kwargs.get('prefsFile')
         self.verboseIfFails = kwargs.get('verboseIfFails')
+        self.headless = kwargs.get('headless')
 
         # only one of these will be set to 1. adding them to the totals in
         # the harness
@@ -682,7 +683,7 @@ class XPCShellTestThread(Thread):
         if self.test_object.get('subprocess') == 'true':
             self.env['PYTHON'] = sys.executable
 
-        if self.test_object.get('headless', False):
+        if self.test_object.get('headless', 'true' if self.headless else None) == 'true':
             self.env["MOZ_HEADLESS"] = '1'
             self.env["DISPLAY"] = '77'  # Set a fake display.
 
@@ -851,8 +852,8 @@ class XPCShellTests(object):
         if os.path.exists(ini_path):
             return TestManifest([ini_path], strict=True)
         else:
-            print >> sys.stderr, ("Failed to find manifest at %s; use --manifest "
-                                  "to set path explicitly." % (ini_path,))
+            self.log.error("Failed to find manifest at %s; use --manifest "
+                           "to set path explicitly." % ini_path)
             sys.exit(1)
 
     def normalizeTest(self, root, test_object):
@@ -1345,7 +1346,7 @@ class XPCShellTests(object):
                 shutil.copyfile(options['failure_manifest'], rerun_manifest)
                 os.remove(options['failure_manifest'])
             else:
-                print >> sys.stderr, "No failures were found to re-run."
+                self.log.error("No failures were found to re-run.")
                 sys.exit(1)
 
         if options.get('testingModulesDir'):
@@ -1397,6 +1398,7 @@ class XPCShellTests(object):
         self.threadCount = options.get('threadCount') or NUM_THREADS
         self.jscovdir = options.get('jscovdir')
         self.enable_webrender = options.get('enable_webrender')
+        self.headless = options.get('headless')
 
         self.testCount = 0
         self.passCount = 0
@@ -1485,6 +1487,7 @@ class XPCShellTests(object):
             'app_dir_key': appDirKey,
             'prefsFile': self.prefsFile,
             'verboseIfFails': self.verboseIfFails,
+            'headless': self.headless,
         }
 
         if self.sequential:

@@ -411,7 +411,7 @@ MSG_DEF(JSMSG_WASM_WAKE_OVERFLOW,      0, JSEXN_WASMRUNTIMEERROR, "too many woke
 MSG_DEF(JSMSG_WASM_DEREF_NULL,         0, JSEXN_WASMRUNTIMEERROR, "dereferencing null pointer")
 MSG_DEF(JSMSG_WASM_BAD_RANGE ,         2, JSEXN_RANGEERR,    "bad {0} {1}")
 MSG_DEF(JSMSG_WASM_BAD_GROW,           1, JSEXN_RANGEERR,    "failed to grow {0}")
-MSG_DEF(JSMSG_WASM_TABLE_OUT_OF_BOUNDS, 0, JSEXN_RANGEERR,   "table index out of bounds")
+MSG_DEF(JSMSG_WASM_TABLE_OUT_OF_BOUNDS, 0, JSEXN_WASMRUNTIMEERROR,   "table index out of bounds")
 MSG_DEF(JSMSG_WASM_BAD_UINT32,         2, JSEXN_TYPEERR,     "bad {0} {1}")
 MSG_DEF(JSMSG_WASM_BAD_BUF_ARG,        0, JSEXN_TYPEERR,     "first argument must be an ArrayBuffer or typed array object")
 MSG_DEF(JSMSG_WASM_BAD_MOD_ARG,        0, JSEXN_TYPEERR,     "first argument must be a WebAssembly.Module")
@@ -567,6 +567,14 @@ MSG_DEF(JSMSG_TOO_MANY_PARENS,         0, JSEXN_INTERNALERR, "too many parenthes
 MSG_DEF(JSMSG_UNICODE_OVERFLOW,        1, JSEXN_SYNTAXERR, "Unicode codepoint must not be greater than 0x10FFFF in {0}")
 MSG_DEF(JSMSG_UNMATCHED_RIGHT_PAREN,   0, JSEXN_SYNTAXERR, "unmatched ) in regular expression")
 MSG_DEF(JSMSG_UNTERM_CLASS,            0, JSEXN_SYNTAXERR, "unterminated character class")
+MSG_DEF(JSMSG_INVALID_PROPERTY_NAME,       0, JSEXN_SYNTAXERR, "invalid property name in regular expression")
+MSG_DEF(JSMSG_INVALID_CLASS_PROPERTY_NAME, 0, JSEXN_SYNTAXERR, "invalid class property name in regular expression")
+MSG_DEF(JSMSG_INCOMPLETE_QUANTIFIER,       0, JSEXN_SYNTAXERR, "incomplete quantifier in regular expression")
+MSG_DEF(JSMSG_INVALID_QUANTIFIER,          0, JSEXN_SYNTAXERR, "invalid quantifier in regular expression")
+MSG_DEF(JSMSG_INVALID_CAPTURE_NAME,        0, JSEXN_SYNTAXERR, "invalid capture group name in regular expression")
+MSG_DEF(JSMSG_DUPLICATE_CAPTURE_NAME,      0, JSEXN_SYNTAXERR, "duplicate capture group name in regular expression")
+MSG_DEF(JSMSG_INVALID_NAMED_REF,           0, JSEXN_SYNTAXERR, "invalid named reference in regular expression")
+MSG_DEF(JSMSG_INVALID_NAMED_CAPTURE_REF,   0, JSEXN_SYNTAXERR, "invalid named capture reference in regular expression")
 
 // Self-hosting
 MSG_DEF(JSMSG_DEFAULT_LOCALE_ERROR,    0, JSEXN_ERR, "internal error getting the default locale")

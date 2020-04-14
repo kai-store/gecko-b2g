@@ -22,13 +22,14 @@ class AutoParser(BaseTryParser):
 
 
 def run(message='{msg}', push=True, closed_tree=False, try_config=None):
+    print("warning: 'mach try auto' is experimental, results may vary!")
     msg = message.format(msg='Tasks automatically selected.')
     try_config = try_config or {}
 
     # XXX Remove once an intelligent scheduling algorithm is running on
     # autoland by default. This ensures `mach try auto` doesn't run SETA.
     try_config.setdefault('optimize-strategies',
-                          'taskgraph.optimize:experimental.bugbug.all')
+                          'taskgraph.optimize:experimental.bugbug.debug')
 
     task_config = {
         'version': 2,

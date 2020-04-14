@@ -44,8 +44,13 @@
 #include "frontend/ParseNode.h"
 #include "frontend/ParseNodeVerify.h"
 #include "frontend/TokenStream.h"
-#include "irregexp/RegExpParser.h"
+#ifndef ENABLE_NEW_REGEXP
+#  include "irregexp/RegExpParser.h"
+#endif
 #include "js/RegExpFlags.h"  // JS::RegExpFlags
+#ifdef ENABLE_NEW_REGEXP
+#  include "new-regexp/RegExpAPI.h"
+#endif
 #include "vm/BigIntType.h"
 #include "vm/BytecodeUtil.h"
 #include "vm/JSAtom.h"
@@ -277,7 +282,7 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
    */
   FunctionBox* funbox = alloc_.new_<FunctionBox>(
       cx_, traceListHead_, toStringStart, this->getCompilationInfo(),
-      inheritedDirectives, generatorKind, asyncKind, fun->displayAtom(),
+      inheritedDirectives, generatorKind, asyncKind, fun->explicitName(),
       fun->flags(), index);
   if (!funbox) {
     ReportOutOfMemory(cx_);
@@ -1740,35 +1745,28 @@ bool LazyScriptCreationData::create(JSContext* cx,
                                     FunctionBox* funbox,
                                     HandleScriptSourceObject sourceObject) {
   MOZ_ASSERT(function);
+
+  using ImmutableFlags = ImmutableScriptFlagsEnum;
+  ImmutableScriptFlags immutableFlags = funbox->immutableFlags();
+
+  // Compute the flags that frontend doesn't directly compute.
+  immutableFlags.setFlag(ImmutableFlags::ForceStrict, forceStrict);
+  immutableFlags.setFlag(ImmutableFlags::Strict, strict);
+  immutableFlags.setFlag(ImmutableFlags::HasMappedArgsObj,
+                         funbox->hasMappedArgsObj());
+
   BaseScript* lazy = BaseScript::CreateLazy(
       cx, compilationInfo, function, sourceObject, closedOverBindings,
-      innerFunctionIndexes, funbox->extent, funbox->immutableFlags());
+      innerFunctionIndexes, funbox->extent, immutableFlags);
   if (!lazy) {
     return false;
   }
 
-  // Flags that need to be copied into the JSScript when we do the full
-  // parse.
-  if (forceStrict) {
-    lazy->setForceStrict();
-  }
-  if (strict) {
-    lazy->setStrict();
-  }
-
-  // Flags which are computed at this point.
-  if (funbox->hasMappedArgsObj()) {
-    lazy->setHasMappedArgsObj();
-  }
-  if (funbox->argumentsHasLocalBinding()) {
-    lazy->setArgumentsHasVarBinding();
-  }
-
-  function->initLazyScript(lazy);
-
   if (fieldInitializers) {
     lazy->setFieldInitializers(*fieldInitializers);
   }
+
+  function->initLazyScript(lazy);
 
   return true;
 }
@@ -2076,12 +2074,6 @@ JSFunction* AllocNewFunction(JSContext* cx,
     fun->setIsSelfHostedBuiltin();
   }
 
-  if (data.typeForScriptedFunction) {
-    if (!JSFunction::setTypeForScriptedFunction(
-            cx, fun, *data.typeForScriptedFunction)) {
-      return nullptr;
-    }
-  }
   return fun;
 }
 
@@ -9677,10 +9669,16 @@ RegExpLiteral* Parser<FullParseHandler, Unit>::newRegExp() {
     // instantiate it. If we have already done a syntax parse, we can
     // skip this.
     LifoAllocScope allocScope(&cx_->tempLifoAlloc());
+#ifdef ENABLE_NEW_REGEXP
+    if (!irregexp::CheckPatternSyntax(cx_, anyChars, range, flags)) {
+      return nullptr;
+    }
+#else
     if (!irregexp::ParsePatternSyntax(anyChars, allocScope.alloc(), range,
                                       flags.unicode())) {
       return nullptr;
     }
+#endif
   }
 
   RegExpIndex index(this->getCompilationInfo().regExpData.length());
@@ -9707,10 +9705,16 @@ Parser<SyntaxParseHandler, Unit>::newRegExp() {
   mozilla::Range<const char16_t> source(chars.begin(), chars.length());
   {
     LifoAllocScope scopeAlloc(&alloc_);
+#ifdef ENABLE_NEW_REGEXP
+    if (!irregexp::CheckPatternSyntax(cx_, anyChars, source, flags)) {
+      return null();
+    }
+#else
     if (!js::irregexp::ParsePatternSyntax(anyChars, scopeAlloc.alloc(), source,
                                           flags.unicode())) {
       return null();
     }
+#endif
   }
 
   return handler_.newRegExp(SyntaxParseHandler::NodeGeneric, pos());

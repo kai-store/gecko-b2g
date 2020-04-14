@@ -905,17 +905,6 @@
   value: @IS_NOT_MOZILLA_OFFICIAL@
   mirror: always
 
-# Fix up common scheme typos?
-- name: browser.fixup.typo.scheme
-  type: bool
-  value: true
-  mirror: always
-
-- name: browser.fixup.dns_first_for_single_words
-  type: bool
-  value: false
-  mirror: always
-
 # Render animations and videos as a solid color
 - name: browser.measurement.render_anims_and_video_solid
   type: RelaxedAtomicBool
@@ -1514,6 +1503,16 @@
   value: false
   mirror: always
 
+- name: dom.disable_beforeunload
+  type: bool
+  value: false
+  mirror: always
+
+- name: dom.require_user_interaction_for_beforeunload
+  type: bool
+  value: true
+  mirror: always
+
 # If set this to true, `Document.execCommand` may be performed nestedly.
 # Otherwise, nested calls just return false.
 - name: dom.document.exec_command.nested_calls_allowed
@@ -1581,6 +1580,14 @@
   type: bool
   value: @IS_NIGHTLY_BUILD@
   mirror: always
+
+#if defined(XP_MACOSX)
+# Whether to disable treating ctrl click as right click
+- name: dom.event.treat_ctrl_click_as_right_click.disabled
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
+  mirror: always
+#endif
 
 # Enable clipboard readText() and writeText() by default
 - name: dom.events.asyncClipboard
@@ -2317,6 +2324,19 @@
   value: false
   mirror: always
 
+#ifdef XP_WIN
+  # Preference that is used to set nsILocalFileWin::useDOSDevicePathSyntax
+  # attribute for all local file instances created by QuotaManager and its
+  # clients. The value of this preference is cached so changing the preference
+  # during runtime has no effect.
+  # See bug 1626846 for setting this to false by default.
+-   name: dom.quotaManager.useDOSDevicePathSyntax
+    type: RelaxedAtomicBool
+    value: false
+    mirror: always
+    do_not_use_directly: true
+#endif
+
 # Reporting API.
 - name: dom.reporting.enabled
   type: RelaxedAtomicBool
@@ -2505,6 +2525,12 @@
 - name: dom.select_events.enabled
   type: bool
   value: true
+  mirror: always
+
+# Whether or not selection events on text controls are enabled.
+- name: dom.select_events.textcontrols.enabled
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 - name: dom.separate_event_queue_for_post_message.enabled
@@ -4050,6 +4076,11 @@
   value: 10
   mirror: once
 
+- name: gfx.vsync.use-waitforvblank
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 # We expose two prefs: gfx.webrender.all and gfx.webrender.enabled.
 # The first enables WR+additional features, and the second just enables WR.
 # For developer convenience, building with --enable-webrender=true or just
@@ -4393,6 +4424,13 @@
   value: true
   mirror: always
 
+# Honor image orientation metadata in the naturalWidth and naturalHeight
+# APIs on HTMLImageElement.
+- name: image.honor_orientation_metadata.natural_size
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
+  mirror: always
+
 # The threshold for inferring that changes to an <img> element's |src|
 # attribute by JavaScript represent an animation, in milliseconds. If the |src|
 # attribute is changing more frequently than this value, then we enter a
@@ -4677,15 +4715,6 @@
 #else
   value: 2 * 1024 * 1024
 #endif
-  mirror: always
-
-#---------------------------------------------------------------------------
-# Prefs starting with "keyword."
-#---------------------------------------------------------------------------
-
-- name: keyword.enabled
-  type: bool
-  value: false
   mirror: always
 
 #---------------------------------------------------------------------------
@@ -5476,9 +5505,10 @@
 
 # Should stray control characters be rendered visibly?
 - name: layout.css.control-characters.visible
-  type: bool
+  type: RelaxedAtomicBool
   value: @IS_NOT_RELEASE_OR_BETA@
   mirror: always
+  rust: true
 
 # Is support for GeometryUtils.convert*FromNode enabled?
 - name: layout.css.convertFromNode.enabled
@@ -5548,6 +5578,13 @@
   type: bool
   value: true
   mirror: always
+
+# Is the initial value for the image-orientation property 'from-image'?
+- name: layout.css.image-orientation.initial-from-image
+  type: RelaxedAtomicBool
+  value: @IS_NIGHTLY_BUILD@
+  mirror: always
+  rust: true
 
 # Is support for CSS initial-letter property enabled?
 - name: layout.css.initial-letter.enabled
@@ -5972,6 +6009,12 @@
   value: false
   mirror: always
 
+# Pref to stop overlay scrollbars from fading out, for testing purposes.
+- name: layout.testing.overlay-scrollbars.always-visible
+  type: bool
+  value: false
+  mirror: always
+
 - name: layout.lower_priority_refresh_driver_during_load
   type: bool
   value: true
@@ -6075,6 +6118,12 @@
   value: true
   mirror: always
 
+# Whether frame visibility tracking is enabled globally.
+- name: layout.framevisibility.enabled
+  type: bool
+  value: true
+  mirror: always
+
 # The fraction of the scrollport we allow to horizontally scroll by before we
 # schedule an update of frame visibility.
 - name: layout.framevisibility.amountscrollbeforeupdatehorizontal
@@ -6087,6 +6136,22 @@
 - name: layout.framevisibility.amountscrollbeforeupdatevertical
   type: int32_t
   value: 2
+  mirror: always
+
+# The number of scrollports wide to expand when tracking frame visibility.
+- name: layout.framevisibility.numscrollportwidths
+  type: uint32_t
+#ifdef ANDROID
+  value: 1
+#else
+  value: 0
+#endif
+  mirror: always
+
+# The number of scrollports high to expand when tracking frame visibility.
+- name: layout.framevisibility.numscrollportheights
+  type: uint32_t
+  value: 1
   mirror: always
 
 # Whether we expand the layout viewport even if the expanded viewport doesn't
@@ -7194,6 +7259,13 @@
   value: false
   mirror: always
 
+# If line-height is lower than this value (in device pixels), 1 line scroll
+# scrolls this height.
+- name: mousewheel.min_line_scroll_amount
+  type: int32_t
+  value: 5
+  mirror: always
+
 #---------------------------------------------------------------------------
 # Prefs starting with "network."
 #---------------------------------------------------------------------------
@@ -7240,12 +7312,16 @@
   value: false
   mirror: always
 
-# 0-Accept, 1-dontAcceptForeign, 2-dontAcceptAny, 3-limitForeign,
-# 4-rejectTracker
-# Keep the old default of accepting all cookies
+# See the full list of values in nsICookieService.idl.
 - name: network.cookie.cookieBehavior
   type: RelaxedAtomicInt32
-  value: 0
+  value: 0 # accept all cookies
+  mirror: always
+
+# See the full list of values in nsICookieService.idl.
+- name: network.cookie.rejectForeignWithExceptions.enabled
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 # Stale threshold for cookies in seconds.
@@ -7478,7 +7554,7 @@
   type: uint32_t
   value: 500
   mirror: always
-  
+
 # A testing flag.
 - name: network.predictor.doing-tests
   type: bool
@@ -8039,6 +8115,24 @@
   value: 1800   # 30 minutes (in seconds)
   mirror: always
 
+# Enable the heuristic to allow storage access for recent visited pages
+- name: privacy.restrict3rdpartystorage.heuristic.recently_visited
+  type: bool
+  value: true
+  mirror: always
+
+# Valid time gap since last visit
+- name: privacy.restrict3rdpartystorage.heuristic.recently_visited_time
+  type: uint32_t
+  value: 600    # 10 minutes
+  mirror: always
+
+# Recent visited pages redirection permission expiration.
+- name: privacy.restrict3rdpartystorage.expiration_visited
+  type: uint32_t
+  value: 2592000   # 30 days (in seconds)
+  mirror: always
+
 # Maximum client-side cookie life-time cap. Measured in seconds, set to 0 to
 # disable.
 - name: privacy.documentCookies.maxage
@@ -8453,6 +8547,19 @@
   value: 5
 #endif
   mirror: always
+
+# Does the access key by itself focus the menu bar?
+- name: ui.key.menuAccessKeyFocuses
+  type: bool
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+  # On Windows and Linux, we now default to showing the menu bar only when alt
+  # is pressed.
+  value: true
+#else
+  value: false
+#endif
+  mirror: always
+
 
 # If true, all popups won't hide automatically on blur
 - name: ui.popup.disable_autohide

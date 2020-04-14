@@ -281,6 +281,7 @@ void nsImageFrame::DestroyFrom(nsIFrame* aDestructRoot,
     imageLoader->FrameDestroyed(this);
     imageLoader->RemoveNativeObserver(mListener);
   } else if (mContentURLRequest) {
+    PresContext()->Document()->ImageTracker()->Remove(mContentURLRequest);
     nsLayoutUtils::DeregisterImageRequest(PresContext(), mContentURLRequest,
                                           &mContentURLRequestRegistered);
     mContentURLRequest->Cancel(NS_BINDING_ABORTED);
@@ -401,6 +402,10 @@ void nsImageFrame::SetupForContentURLRequest() {
   if (!mContentURLRequest) {
     return;
   }
+
+  // We're not using AssociateRequestToFrame for the content property, so we
+  // need to add it to the image tracker manually.
+  PresContext()->Document()->ImageTracker()->Add(mContentURLRequest);
 
   uint32_t status = 0;
   nsresult rv = mContentURLRequest->GetImageStatus(&status);
@@ -2395,7 +2400,8 @@ nsresult nsImageFrame::GetFrameName(nsAString& aResult) const {
   return MakeFrameName(NS_LITERAL_STRING("ImageFrame"), aResult);
 }
 
-void nsImageFrame::List(FILE* out, const char* aPrefix, uint32_t aFlags) const {
+void nsImageFrame::List(FILE* out, const char* aPrefix,
+                        ListFlags aFlags) const {
   nsCString str;
   ListGeneric(str, aPrefix, aFlags);
 

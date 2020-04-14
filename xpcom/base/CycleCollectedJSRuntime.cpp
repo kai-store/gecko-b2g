@@ -528,6 +528,8 @@ inline void JSHolderMap::Put(void* aHolder, nsScriptObjectTracer* aTracer) {
   if (ptr) {
     Entry* info = ptr->value();
     MOZ_ASSERT(info->mHolder == aHolder);
+    MOZ_ASSERT(info->mTracer == aTracer,
+               "Don't call HoldJSObjects in superclass ctors");
     info->mTracer = aTracer;
     return;
   }
@@ -1068,7 +1070,11 @@ void mozilla::TraceScriptHolder(nsISupports* aHolder, JSTracer* aTracer) {
   participant->Trace(aHolder, JsGcTracer(), aTracer);
 }
 
-#ifdef DEBUG
+#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION) || defined(DEBUG)
+#  define CHECK_SINGLE_ZONE_JS_HOLDERS
+#endif
+
+#ifdef CHECK_SINGLE_ZONE_JS_HOLDERS
 
 // A tracer that checks that a JS holder only holds JS GC things in a single
 // JS::Zone.
@@ -1175,6 +1181,15 @@ static inline void CheckHolderIsSingleZone(
   aParticipant->Trace(aHolder, tracer, nullptr);
 }
 
+static inline bool ShouldCheckSingleZoneHolders() {
+#  ifdef DEBUG
+  return true;
+#  else
+  // Don't check every time to avoid performance impact.
+  return rand() % 256 == 0;
+#  endif
+}
+
 #endif
 
 void CycleCollectedJSRuntime::TraceNativeGrayRoots(JSTracer* aTracer) {
@@ -1182,9 +1197,16 @@ void CycleCollectedJSRuntime::TraceNativeGrayRoots(JSTracer* aTracer) {
   // would hurt to do this after the JS holders.
   TraceAdditionalNativeGrayRoots(aTracer);
 
-  mJSHolders.ForEach([aTracer](void* holder, nsScriptObjectTracer* tracer) {
-#ifdef DEBUG
-    if (!tracer->IsMultiZoneJSHolder()) {
+#ifdef CHECK_SINGLE_ZONE_JS_HOLDERS
+  bool checkSingleZoneHolders = ShouldCheckSingleZoneHolders();
+#else
+  bool checkSingleZoneHolders = false;
+#endif
+
+  mJSHolders.ForEach([aTracer, checkSingleZoneHolders](
+                         void* holder, nsScriptObjectTracer* tracer) {
+#ifdef CHECK_SINGLE_ZONE_JS_HOLDERS
+    if (checkSingleZoneHolders && !tracer->IsMultiZoneJSHolder()) {
       CheckHolderIsSingleZone(holder, tracer);
     }
 #endif

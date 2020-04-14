@@ -10,6 +10,7 @@
 #include "base/shared_memory.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BrowserBridgeChild.h"
 #include "mozilla/dom/PBrowserOrId.h"
 #include "mozilla/dom/PContentChild.h"
@@ -19,7 +20,6 @@
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/Shmem.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
-#include "nsAutoPtr.h"
 #include "nsHashKeys.h"
 #include "nsIContentChild.h"
 #include "nsIObserver.h"
@@ -43,6 +43,7 @@ class nsIURIClassifierCallback;
 struct LookAndFeelInt;
 class nsDocShellLoadState;
 class nsFrameLoader;
+class nsIOpenWindowInfo;
 
 namespace mozilla {
 class RemoteSpellcheckEngineChild;
@@ -109,7 +110,7 @@ class ContentChild final
   };
 
   nsresult ProvideWindowCommon(BrowserChild* aTabOpener,
-                               mozIDOMWindowProxy* aParent, bool aIframeMoz,
+                               nsIOpenWindowInfo* aOpenWindowInfo,
                                uint32_t aChromeFlags, bool aCalledFromJS,
                                bool aWidthSpecified, nsIURI* aURI,
                                const nsAString& aName,
@@ -559,10 +560,9 @@ class ContentChild final
   mozilla::ipc::IPCResult RecvConstructBrowser(
       ManagedEndpoint<PBrowserChild>&& aBrowserEp,
       ManagedEndpoint<PWindowGlobalChild>&& aWindowEp, const TabId& aTabId,
-      const TabId& aSameTabGroupAs, const IPCTabContext& aContext,
-      const WindowGlobalInit& aWindowInit, const uint32_t& aChromeFlags,
-      const ContentParentId& aCpID, const bool& aIsForBrowser,
-      const bool& aIsTopLevel);
+      const IPCTabContext& aContext, const WindowGlobalInit& aWindowInit,
+      const uint32_t& aChromeFlags, const ContentParentId& aCpID,
+      const bool& aIsForBrowser, const bool& aIsTopLevel);
 
   FORWARD_SHMEM_ALLOCATOR_TO(PContentChild)
 
@@ -705,6 +705,7 @@ class ContentChild final
 
   mozilla::ipc::IPCResult RecvCrossProcessRedirect(
       RedirectToRealChannelArgs&& aArgs,
+      nsTArray<Endpoint<extensions::PStreamFilterParent>>&& aEndpoints,
       CrossProcessRedirectResolver&& aResolve);
 
   mozilla::ipc::IPCResult RecvStartDelayedAutoplayMediaComponents(
@@ -787,6 +788,9 @@ class ContentChild final
 
   bool DeallocPIccChild(PIccChild* aActor);
   // MOZ_B2G_RIL_END
+  const nsTArray<RefPtr<BrowsingContextGroup>>& BrowsingContextGroups() const {
+    return mBrowsingContextGroupHolder;
+  }
 
  private:
   static void ForceKillTimerCallback(nsITimer* aTimer, void* aClosure);
@@ -800,9 +804,6 @@ class ContentChild final
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
   virtual void ProcessingError(Result aCode, const char* aReason) override;
-
-  virtual already_AddRefed<nsIEventTarget> GetSpecificMessageEventTarget(
-      const Message& aMsg) override;
 
   virtual void OnChannelReceivedMessage(const Message& aMsg) override;
 
@@ -896,7 +897,7 @@ class ContentChild final
   virtual PContentChild::Result OnMessageReceived(const Message& aMsg,
                                                   Message*& aReply) override;
 
-  nsTArray<nsAutoPtr<AlertObserver>> mAlertObservers;
+  nsTArray<mozilla::UniquePtr<AlertObserver>> mAlertObservers;
   RefPtr<ConsoleListener> mConsoleListener;
 
   nsTHashtable<nsPtrHashKey<nsIObserver>> mIdleObservers;

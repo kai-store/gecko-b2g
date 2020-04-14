@@ -7,7 +7,6 @@
 #include <stdio.h>
 
 #include "nsError.h"
-#include "nsAutoPtr.h"
 #include "nsThreadUtils.h"
 #include "nsIFile.h"
 #include "nsIFileURL.h"
@@ -352,10 +351,10 @@ class AsyncCloseConnection final : public Runnable {
   }
 
   ~AsyncCloseConnection() override {
-    NS_ReleaseOnMainThreadSystemGroup("AsyncCloseConnection::mConnection",
-                                      mConnection.forget());
-    NS_ReleaseOnMainThreadSystemGroup("AsyncCloseConnection::mCallbackEvent",
-                                      mCallbackEvent.forget());
+    NS_ReleaseOnMainThread("AsyncCloseConnection::mConnection",
+                           mConnection.forget());
+    NS_ReleaseOnMainThread("AsyncCloseConnection::mCallbackEvent",
+                           mCallbackEvent.forget());
   }
 
  private:

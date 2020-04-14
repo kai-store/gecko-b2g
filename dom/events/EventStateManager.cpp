@@ -20,6 +20,7 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/DragEvent.h"
 #include "mozilla/dom/Event.h"
@@ -251,8 +252,7 @@ nsresult EventStateManager::UpdateUserActivityTimer() {
   if (!gUserInteractionTimerCallback) return NS_OK;
 
   if (!gUserInteractionTimer) {
-    gUserInteractionTimer =
-        NS_NewTimer(SystemGroup::EventTargetFor(TaskCategory::Other)).take();
+    gUserInteractionTimer = NS_NewTimer().take();
   }
 
   if (gUserInteractionTimer) {
@@ -1473,8 +1473,7 @@ void EventStateManager::CreateClickHoldTimer(nsPresContext* inPresContext,
       Preferences::GetInt("ui.click_hold_context_menus.delay", 500);
   NS_NewTimerWithFuncCallback(
       getter_AddRefs(mClickHoldTimer), sClickHoldCallback, this, clickHoldDelay,
-      nsITimer::TYPE_ONE_SHOT, "EventStateManager::CreateClickHoldTimer",
-      SystemGroup::EventTargetFor(TaskCategory::Other));
+      nsITimer::TYPE_ONE_SHOT, "EventStateManager::CreateClickHoldTimer");
 }  // CreateClickHoldTimer
 
 //
@@ -4138,36 +4137,39 @@ class MOZ_STACK_CLASS ESMEventCB : public EventDispatchingCallback {
   nsCOMPtr<nsIContent> mTarget;
 };
 
-static void CreateMouseOrPointerWidgetEvent(
+static UniquePtr<WidgetMouseEvent> CreateMouseOrPointerWidgetEvent(
     WidgetMouseEvent* aMouseEvent, EventMessage aMessage,
-    nsIContent* aRelatedContent, nsAutoPtr<WidgetMouseEvent>& aNewEvent) {
+    nsIContent* aRelatedContent) {
   WidgetPointerEvent* sourcePointer = aMouseEvent->AsPointerEvent();
+  UniquePtr<WidgetMouseEvent> newEvent;
   if (sourcePointer) {
     AUTO_PROFILER_LABEL("CreateMouseOrPointerWidgetEvent", OTHER);
 
-    nsAutoPtr<WidgetPointerEvent> newPointerEvent;
-    newPointerEvent = new WidgetPointerEvent(aMouseEvent->IsTrusted(), aMessage,
-                                             aMouseEvent->mWidget);
+    WidgetPointerEvent* newPointerEvent = new WidgetPointerEvent(
+        aMouseEvent->IsTrusted(), aMessage, aMouseEvent->mWidget);
     newPointerEvent->mIsPrimary = sourcePointer->mIsPrimary;
     newPointerEvent->mWidth = sourcePointer->mWidth;
     newPointerEvent->mHeight = sourcePointer->mHeight;
     newPointerEvent->mInputSource = sourcePointer->mInputSource;
     newPointerEvent->mRelatedTarget = aRelatedContent;
-    aNewEvent = newPointerEvent.forget();
+
+    newEvent = WrapUnique(newPointerEvent);
   } else {
-    aNewEvent =
-        new WidgetMouseEvent(aMouseEvent->IsTrusted(), aMessage,
-                             aMouseEvent->mWidget, WidgetMouseEvent::eReal);
-    aNewEvent->mRelatedTarget = aRelatedContent;
+    newEvent = MakeUnique<WidgetMouseEvent>(aMouseEvent->IsTrusted(), aMessage,
+                                            aMouseEvent->mWidget,
+                                            WidgetMouseEvent::eReal);
+    newEvent->mRelatedTarget = aRelatedContent;
   }
-  aNewEvent->mRefPoint = aMouseEvent->mRefPoint;
-  aNewEvent->mModifiers = aMouseEvent->mModifiers;
-  aNewEvent->mButton = aMouseEvent->mButton;
-  aNewEvent->mButtons = aMouseEvent->mButtons;
-  aNewEvent->mPressure = aMouseEvent->mPressure;
-  aNewEvent->mPluginEvent = aMouseEvent->mPluginEvent;
-  aNewEvent->mInputSource = aMouseEvent->mInputSource;
-  aNewEvent->pointerId = aMouseEvent->pointerId;
+  newEvent->mRefPoint = aMouseEvent->mRefPoint;
+  newEvent->mModifiers = aMouseEvent->mModifiers;
+  newEvent->mButton = aMouseEvent->mButton;
+  newEvent->mButtons = aMouseEvent->mButtons;
+  newEvent->mPressure = aMouseEvent->mPressure;
+  newEvent->mPluginEvent = aMouseEvent->mPluginEvent;
+  newEvent->mInputSource = aMouseEvent->mInputSource;
+  newEvent->pointerId = aMouseEvent->pointerId;
+
+  return newEvent;
 }
 
 nsIFrame* EventStateManager::DispatchMouseOrPointerEvent(
@@ -4198,9 +4200,8 @@ nsIFrame* EventStateManager::DispatchMouseOrPointerEvent(
   nsCOMPtr<nsIContent> targetContent = aTargetContent;
   nsCOMPtr<nsIContent> relatedContent = aRelatedContent;
 
-  nsAutoPtr<WidgetMouseEvent> dispatchEvent;
-  CreateMouseOrPointerWidgetEvent(aMouseEvent, aMessage, relatedContent,
-                                  dispatchEvent);
+  UniquePtr<WidgetMouseEvent> dispatchEvent =
+      CreateMouseOrPointerWidgetEvent(aMouseEvent, aMessage, relatedContent);
 
   AutoWeakFrame previousTarget = mCurrentTarget;
   mCurrentTargetContent = targetContent;
@@ -4209,8 +4210,8 @@ nsIFrame* EventStateManager::DispatchMouseOrPointerEvent(
 
   nsEventStatus status = nsEventStatus_eIgnore;
   ESMEventCB callback(targetContent);
-  EventDispatcher::Dispatch(targetContent, mPresContext, dispatchEvent, nullptr,
-                            &status, &callback);
+  EventDispatcher::Dispatch(targetContent, mPresContext, dispatchEvent.get(),
+                            nullptr, &status, &callback);
 
   if (mPresContext) {
     // Although the primary frame was checked in event callback, it may not be
@@ -4222,9 +4223,9 @@ nsIFrame* EventStateManager::DispatchMouseOrPointerEvent(
     if (IsRemoteTarget(targetContent)) {
       if (aMessage == eMouseOut) {
         // For remote content, send a "top-level" widget mouse exit event.
-        nsAutoPtr<WidgetMouseEvent> remoteEvent;
-        CreateMouseOrPointerWidgetEvent(aMouseEvent, eMouseExitFromWidget,
-                                        relatedContent, remoteEvent);
+        UniquePtr<WidgetMouseEvent> remoteEvent =
+            CreateMouseOrPointerWidgetEvent(aMouseEvent, eMouseExitFromWidget,
+                                            relatedContent);
         remoteEvent->mExitFrom = WidgetMouseEvent::eTopLevel;
 
         // mCurrentTarget is set to the new target, so we must reset it to the
@@ -4232,12 +4233,12 @@ nsIFrame* EventStateManager::DispatchMouseOrPointerEvent(
         // will be set back below.) HandleCrossProcessEvent will query for the
         // proper target via GetEventTarget which will return mCurrentTarget.
         mCurrentTarget = targetFrame;
-        HandleCrossProcessEvent(remoteEvent, &status);
+        HandleCrossProcessEvent(remoteEvent.get(), &status);
       } else if (aMessage == eMouseOver) {
-        nsAutoPtr<WidgetMouseEvent> remoteEvent;
-        CreateMouseOrPointerWidgetEvent(aMouseEvent, eMouseEnterIntoWidget,
-                                        relatedContent, remoteEvent);
-        HandleCrossProcessEvent(remoteEvent, &status);
+        UniquePtr<WidgetMouseEvent> remoteEvent =
+            CreateMouseOrPointerWidgetEvent(aMouseEvent, eMouseEnterIntoWidget,
+                                            relatedContent);
+        HandleCrossProcessEvent(remoteEvent.get(), &status);
       }
     }
   }

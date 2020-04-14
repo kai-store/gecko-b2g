@@ -1707,8 +1707,7 @@ nsIFrame::Sides nsIFrame::GetSkipSides(const ReflowInput* aReflowInput) const {
 }
 
 nsRect nsIFrame::GetPaddingRectRelativeToSelf() const {
-  nsMargin border(GetUsedBorder());
-  border.ApplySkipSides(GetSkipSides());
+  nsMargin border = GetUsedBorder().ApplySkipSides(GetSkipSides());
   nsRect r(0, 0, mRect.width, mRect.height);
   r.Deflate(border);
   return r;
@@ -1732,8 +1731,7 @@ WritingMode nsIFrame::WritingModeForLine(WritingMode aSelfWM,
 }
 
 nsRect nsIFrame::GetMarginRectRelativeToSelf() const {
-  nsMargin m = GetUsedMargin();
-  m.ApplySkipSides(GetSkipSides());
+  nsMargin m = GetUsedMargin().ApplySkipSides(GetSkipSides());
   nsRect r(0, 0, mRect.width, mRect.height);
   r.Inflate(m);
   return r;
@@ -1850,8 +1848,7 @@ bool nsIFrame::HasPerspective(const nsStyleDisplay* aStyleDisplay) const {
 }
 
 nsRect nsIFrame::GetContentRectRelativeToSelf() const {
-  nsMargin bp(GetUsedBorderAndPadding());
-  bp.ApplySkipSides(GetSkipSides());
+  nsMargin bp = GetUsedBorderAndPadding().ApplySkipSides(GetSkipSides());
   nsRect r(0, 0, mRect.width, mRect.height);
   r.Deflate(bp);
   return r;
@@ -3896,7 +3893,8 @@ void nsIFrame::BuildDisplayListForStackingContext(
         containerItemASR, aBuilder->CurrentActiveScrolledRoot());
     resultList.AppendNewToTop<nsDisplayStickyPosition>(
         aBuilder, this, &resultList, stickyASR,
-        aBuilder->CurrentActiveScrolledRoot());
+        aBuilder->CurrentActiveScrolledRoot(),
+        clipState.IsClippedToDisplayPort());
     ct.TrackContainer(resultList.GetTop());
 
     // If the sticky element is inside a filter, annotate the scroll frame that
@@ -8050,9 +8048,31 @@ nsAutoCString nsIFrame::ListTag() const {
   return tag;
 }
 
+std::string nsIFrame::ConvertToString(const LogicalRect& aRect,
+                                      const WritingMode aWM, ListFlags aFlags) {
+  if (aFlags.contains(ListFlag::DisplayInCSSPixels)) {
+    // Abuse CSSRect to store all LogicalRect's dimensions in CSS pixels.
+    return ToString(mozilla::CSSRect(CSSPixel::FromAppUnits(aRect.IStart(aWM)),
+                                     CSSPixel::FromAppUnits(aRect.BStart(aWM)),
+                                     CSSPixel::FromAppUnits(aRect.ISize(aWM)),
+                                     CSSPixel::FromAppUnits(aRect.BSize(aWM))));
+  }
+  return ToString(aRect);
+}
+
+std::string nsIFrame::ConvertToString(const LogicalSize& aSize,
+                                      const WritingMode aWM, ListFlags aFlags) {
+  if (aFlags.contains(ListFlag::DisplayInCSSPixels)) {
+    // Abuse CSSSize to store all LogicalSize's dimensions in CSS pixels.
+    return ToString(CSSSize(CSSPixel::FromAppUnits(aSize.ISize(aWM)),
+                            CSSPixel::FromAppUnits(aSize.BSize(aWM))));
+  }
+  return ToString(aSize);
+}
+
 // Debugging
 void nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix,
-                           uint32_t aFlags) const {
+                           ListFlags aFlags) const {
   aTo += aPrefix;
   aTo += ListTag();
   if (HasView()) {
@@ -8087,9 +8107,9 @@ void nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix,
       aTo += nsPrintfCString(" FFR");
       if (nsFontInflationData* data =
               nsFontInflationData::FindFontInflationDataFor(this)) {
-        aTo += nsPrintfCString(",enabled=%s,UIS=%s",
-                               data->InflationEnabled() ? "yes" : "no",
-                               ToString(data->UsableISize()).c_str());
+        aTo += nsPrintfCString(
+            ",enabled=%s,UIS=%s", data->InflationEnabled() ? "yes" : "no",
+            ConvertToString(data->UsableISize(), aFlags).c_str());
       }
     }
     if (HasAnyStateBits(NS_FRAME_FONT_INFLATION_CONTAINER)) {
@@ -8097,12 +8117,13 @@ void nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix,
     }
     aTo += nsPrintfCString(" FI=%f", nsLayoutUtils::FontSizeInflationFor(this));
   }
-  aTo += nsPrintfCString(" %s", ToString(mRect).c_str());
+  aTo += nsPrintfCString(" %s", ConvertToString(mRect, aFlags).c_str());
 
   mozilla::WritingMode wm = GetWritingMode();
   if (wm.IsVertical() || wm.IsBidiRTL()) {
-    aTo += nsPrintfCString(" wm=%s logical-size=(%s)", ToString(wm).c_str(),
-                           ToString(GetLogicalSize()).c_str());
+    aTo +=
+        nsPrintfCString(" wm=%s logical-size=(%s)", ToString(wm).c_str(),
+                        ConvertToString(GetLogicalSize(), wm, aFlags).c_str());
   }
 
   nsIFrame* parent = GetParent();
@@ -8111,27 +8132,30 @@ void nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix,
     if (pWM.IsVertical() || pWM.IsBidiRTL()) {
       nsSize containerSize = parent->mRect.Size();
       LogicalRect lr(pWM, mRect, containerSize);
-      aTo += nsPrintfCString(
-          " parent-wm=%s cs=(%s) logical-rect=%s", ToString(pWM).c_str(),
-          ToString(containerSize).c_str(), ToString(lr).c_str());
+      aTo += nsPrintfCString(" parent-wm=%s cs=(%s) logical-rect=%s",
+                             ToString(pWM).c_str(),
+                             ConvertToString(containerSize, aFlags).c_str(),
+                             ConvertToString(lr, pWM, aFlags).c_str());
     }
   }
   nsIFrame* f = const_cast<nsIFrame*>(this);
   if (f->HasOverflowAreas()) {
     nsRect vo = f->GetVisualOverflowRect();
     if (!vo.IsEqualEdges(mRect)) {
-      aTo += nsPrintfCString(" vis-overflow=%s", ToString(vo).c_str());
+      aTo += nsPrintfCString(" vis-overflow=%s",
+                             ConvertToString(vo, aFlags).c_str());
     }
     nsRect so = f->GetScrollableOverflowRect();
     if (!so.IsEqualEdges(mRect)) {
-      aTo += nsPrintfCString(" scr-overflow=%s", ToString(so).c_str());
+      aTo += nsPrintfCString(" scr-overflow=%s",
+                             ConvertToString(so, aFlags).c_str());
     }
   }
   bool hasNormalPosition;
   nsPoint normalPosition = GetNormalPosition(&hasNormalPosition);
   if (hasNormalPosition) {
     aTo += nsPrintfCString(" normal-position=%s",
-                           ToString(normalPosition).c_str());
+                           ConvertToString(normalPosition, aFlags).c_str());
   }
   if (0 != mState) {
     aTo += nsPrintfCString(" [state=%016llx]", (unsigned long long)mState);
@@ -8164,7 +8188,7 @@ void nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix,
   aTo += "]";
 }
 
-void nsIFrame::List(FILE* out, const char* aPrefix, uint32_t aFlags) const {
+void nsIFrame::List(FILE* out, const char* aPrefix, ListFlags aFlags) const {
   nsCString str;
   ListGeneric(str, aPrefix, aFlags);
   fprintf_stderr(out, "%s\n", str.get());
@@ -8216,21 +8240,19 @@ nsresult nsFrame::MakeFrameName(const nsAString& aType,
   return NS_OK;
 }
 
-void nsIFrame::DumpFrameTree() const { RootFrameList(PresContext(), stderr); }
+void nsIFrame::DumpFrameTree() const {
+  PresShell()->GetRootFrame()->List(stderr);
+}
+
+void nsIFrame::DumpFrameTreeInCSSPixels() const {
+  PresShell()->GetRootFrame()->List(stderr, "", ListFlag::DisplayInCSSPixels);
+}
 
 void nsIFrame::DumpFrameTreeLimited() const { List(stderr); }
-
-void nsIFrame::RootFrameList(nsPresContext* aPresContext, FILE* out,
-                             const char* aPrefix) {
-  if (!aPresContext || !out) return;
-
-  if (mozilla::PresShell* presShell = aPresContext->GetPresShell()) {
-    nsIFrame* frame = presShell->GetRootFrame();
-    if (frame) {
-      frame->List(out, aPrefix);
-    }
-  }
+void nsIFrame::DumpFrameTreeLimitedInCSSPixels() const {
+  List(stderr, "", ListFlag::DisplayInCSSPixels);
 }
+
 #endif
 
 bool nsIFrame::IsVisibleForPainting() { return StyleVisibility()->IsVisible(); }
@@ -8372,8 +8394,10 @@ nsresult nsFrame::GetNextPrevLineFromeBlockFrame(nsPresContext* aPresContext,
   aPos->mAttach = aPos->mDirection == eDirNext ? CARET_ASSOCIATE_AFTER
                                                : CARET_ASSOCIATE_BEFORE;
 
-  nsAutoLineIterator it = aBlockFrame->GetLineIterator();
-  if (!it) return NS_ERROR_FAILURE;
+  const nsAutoLineIterator it = aBlockFrame->GetLineIterator();
+  if (!it) {
+    return NS_ERROR_FAILURE;
+  }
   int32_t searchingLine = aLineStart;
   int32_t countLines = it->GetNumLines();
   if (aOutSideLimit > 0)  // start at end
@@ -9157,7 +9181,7 @@ nsIFrame::FrameSearchResult nsFrame::PeekOffsetCharacter(
 
 nsIFrame::FrameSearchResult nsFrame::PeekOffsetWord(
     bool aForward, bool aWordSelectEatSpace, bool aIsKeyboardSelect,
-    int32_t* aOffset, PeekWordState* aState, bool aTrimSpaces) {
+    int32_t* aOffset, PeekWordState* aState, bool /*aTrimSpaces*/) {
   NS_ASSERTION(aOffset && *aOffset <= 1, "aOffset out of range");
   int32_t startOffset = *aOffset;
   // This isn't text, so truncate the context
@@ -9189,6 +9213,7 @@ nsIFrame::FrameSearchResult nsFrame::PeekOffsetWord(
   return CONTINUE;
 }
 
+// static
 bool nsFrame::BreakWordBetweenPunctuation(const PeekWordState* aState,
                                           bool aForward, bool aPunctAfter,
                                           bool aWhitespaceAfter,

@@ -468,7 +468,7 @@ bool WebRenderAPI::HitTest(const wr::WorldPoint& aPoint,
                            layers::ScrollableLayerGuid::ViewID& aOutScrollId,
                            gfx::CompositorHitTestInfo& aOutHitInfo,
                            SideBits& aOutSideBits) {
-  static_assert(DoesCompositorHitTestInfoFitIntoBits<12>(),
+  static_assert(gfx::DoesCompositorHitTestInfoFitIntoBits<12>(),
                 "CompositorHitTestFlags MAX value has to be less than number "
                 "of bits in uint16_t minus 4 for SideBitsPacked");
 
@@ -505,7 +505,7 @@ void WebRenderAPI::Readback(const TimeStamp& aStartTime, gfx::IntSize size,
       aRenderThread.UpdateAndRender(aWindowId, VsyncId(), mStartTime,
                                     /* aRender */ true, Some(mSize),
                                     wr::SurfaceFormatToImageFormat(mFormat),
-                                    Some(mBuffer), false);
+                                    Some(mBuffer));
       layers::AutoCompleteTask complete(mTask);
     }
 
@@ -926,17 +926,6 @@ void DisplayListBuilder::Save() { wr_dp_save(mWrState); }
 void DisplayListBuilder::Restore() { wr_dp_restore(mWrState); }
 void DisplayListBuilder::ClearSave() { wr_dp_clear_save(mWrState); }
 
-DisplayListBuilder& DisplayListBuilder::SubBuilder(RenderRoot aRenderRoot) {
-  MOZ_ASSERT(aRenderRoot == mRenderRoot);
-  return *this;
-}
-
-bool DisplayListBuilder::HasSubBuilder(RenderRoot aRenderRoot) {
-  MOZ_ASSERT(aRenderRoot == RenderRoot::Default);
-  MOZ_ASSERT(mRenderRoot == RenderRoot::Default);
-  return true;
-}
-
 usize DisplayListBuilder::Dump(usize aIndent, const Maybe<usize>& aStart,
                                const Maybe<usize>& aEnd) {
   return wr_dump_display_list(mWrState, aIndent, aStart.ptrOr(nullptr),
@@ -962,13 +951,11 @@ void DisplayListBuilder::Finalize(
   }
 
   wr::VecU8 dl;
-  wr_api_finalize_builder(SubBuilder(aOutTransaction.mRenderRoot).mWrState,
-                          &aOutTransaction.mContentSize,
+  wr_api_finalize_builder(mWrState, &aOutTransaction.mContentSize,
                           &aOutTransaction.mDLDesc, &dl.inner);
   aOutTransaction.mDL.emplace(dl.inner.data, dl.inner.length,
                               dl.inner.capacity);
-  aOutTransaction.mRemotePipelineIds =
-      std::move(SubBuilder(aOutTransaction.mRenderRoot).mRemotePipelineIds);
+  aOutTransaction.mRemotePipelineIds = std::move(mRemotePipelineIds);
   dl.inner.capacity = 0;
   dl.inner.data = nullptr;
 }
@@ -1558,7 +1545,7 @@ uint16_t SideBitsToHitInfoBits(SideBits aSideBits) {
 void DisplayListBuilder::SetHitTestInfo(
     const layers::ScrollableLayerGuid::ViewID& aScrollId,
     gfx::CompositorHitTestInfo aHitInfo, SideBits aSideBits) {
-  static_assert(DoesCompositorHitTestInfoFitIntoBits<12>(),
+  static_assert(gfx::DoesCompositorHitTestInfoFitIntoBits<12>(),
                 "CompositorHitTestFlags MAX value has to be less than number "
                 "of bits in uint16_t minus 4 for SideBitsPacked");
 
@@ -1610,7 +1597,7 @@ already_AddRefed<gfxContext> DisplayListBuilder::GetTextContext(
   } else {
     mCachedTextDT->Reinitialize(aResources, aSc, aManager, aItem, aBounds);
     mCachedContext->SetDeviceOffset(aDeviceOffset);
-    mCachedContext->SetMatrix(Matrix());
+    mCachedContext->SetMatrix(gfx::Matrix());
   }
 
   RefPtr<gfxContext> tmp = mCachedContext;
